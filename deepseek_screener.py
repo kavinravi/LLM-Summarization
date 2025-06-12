@@ -298,20 +298,12 @@ def document_screening_page():
     
     criteria_source = st.radio(
         "Choose criteria source:",
-        ["Use default criteria", "Upload custom criteria", "Enter custom criteria"]
+        ["Upload custom criteria", "Enter custom criteria"]
     )
     
     criteria = []
     
-    if criteria_source == "Use default criteria":
-        criteria = load_default_criteria()
-        st.success(f"Loaded {len(criteria)} default criteria")
-        
-        with st.expander("View default criteria"):
-            for i, criterion in enumerate(criteria, 1):
-                st.write(f"{i}. {criterion}")
-    
-    elif criteria_source == "Upload custom criteria":
+    if criteria_source == "Upload custom criteria":
         criteria_file = st.file_uploader(
             "Upload criteria file",
             type=['json', 'yml', 'yaml'],
@@ -333,19 +325,81 @@ def document_screening_page():
                         st.write(f"{i}. {criterion}")
             except Exception as e:
                 st.error(f"Error loading criteria file: {str(e)}")
+        
+        # Criteria bank for upload option
+        st.write("**Add from our suggested criteria:**")
+        default_criteria = load_default_criteria()
+        
+        if default_criteria:
+            # Filter out criteria that are already added
+            available_criteria = [c for c in default_criteria if c not in criteria]
+            
+            if available_criteria:
+                cols = st.columns(1)  # Single column for the bank
+                with cols[0]:
+                    for criterion in available_criteria:
+                        col1, col2 = st.columns([0.9, 0.1])
+                        with col1:
+                            st.write(f"• {criterion}")
+                        with col2:
+                            if st.button("➕", key=f"add_upload_{hash(criterion)}", help=f"Add: {criterion[:50]}..."):
+                                # Add to uploaded criteria
+                                criteria.append(criterion)
+                                st.success(f"Added criterion!")
+                                st.rerun()
+            else:
+                st.info("All suggested criteria have been added!")
     
     elif criteria_source == "Enter custom criteria":
         st.write("Enter criteria (one per line):")
+        
+        # Initialize session state for text area if not exists
+        if 'criteria_text' not in st.session_state:
+            st.session_state.criteria_text = ""
+        
         criteria_text = st.text_area(
             "Criteria",
+            value=st.session_state.criteria_text,
             height=200,
             placeholder="Enter each criterion on a new line...",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="criteria_input"
         )
+        
+        # Update session state when text changes
+        st.session_state.criteria_text = criteria_text
         
         if criteria_text.strip():
             criteria = [line.strip() for line in criteria_text.split('\n') if line.strip()]
             st.success(f"Added {len(criteria)} criteria")
+        
+        # Criteria bank for text entry option
+        st.write("**Add from our suggested criteria:**")
+        default_criteria = load_default_criteria()
+        
+        if default_criteria:
+            # Filter out criteria that are already in the text area
+            current_criteria = [line.strip() for line in st.session_state.criteria_text.split('\n') if line.strip()]
+            available_criteria = [c for c in default_criteria if c not in current_criteria]
+            
+            if available_criteria:
+                cols = st.columns(1)  # Single column for the bank
+                with cols[0]:
+                    for criterion in available_criteria:
+                        col1, col2 = st.columns([0.9, 0.1])
+                        with col1:
+                            st.write(f"• {criterion}")
+                        with col2:
+                            if st.button("➕", key=f"add_text_{hash(criterion)}", help=f"Add: {criterion[:50]}..."):
+                                # Add to text area
+                                if st.session_state.criteria_text.strip():
+                                    st.session_state.criteria_text += f"\n{criterion}"
+                                else:
+                                    st.session_state.criteria_text = criterion
+                                st.success(f"Added criterion!")
+                                st.rerun()
+            else:
+                st.info("All suggested criteria have been added!")
     
     # Process documents
     if uploaded_files and criteria:
