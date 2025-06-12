@@ -1,0 +1,12 @@
+[
+  "Resource adequacy – Average annual wind capacity factor ≥ 35 % OR global-horizontal-irradiance ≥ 5.5 kWh/m²/day at the site centroid.",
+  "Grid proximity – Site centroid ≤ 5 km from a ≥ 115 kV transmission line AND ≤ 15 km from an existing substation with ≥ 50 MW spare capacity.",
+  "Land cost & ownership – Aggregate parcel price ≤ $3 000 / acre AND all parcels owned by ≤ 1 legal entity.",
+  "Community sentiment – Local public-sentiment score (social media + recent ballot measures) ≥ 0 (neutral or positive).",
+  "Environmental exclusion – No overlap with critical habitat, wetlands, or conservation easements plus a 500 m buffer clear of those areas.",
+  "Airport setback – Site boundary ≥ 8 km from any FAA-classified airport runway.",
+  "Sensitive receptors – Site boundary ≥ 500 m from high-density housing, schools, or hospitals.",
+  "Road access – Site boundary ≤ 1 km from a paved state highway or federal road.",
+  "Permitting friendliness – Local zoning explicitly allows utility-scale solar/wind as permitted or conditional use and typical approval timeline ≤ 3 months.",
+  "Digital interconnection – Interconnection queue managed via online portal with publicly posted data and median study time ≤ 12 months."
+]
