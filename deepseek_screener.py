@@ -31,6 +31,62 @@ st.set_page_config(
 # Constants
 CHUNK_SIZE_CHARS = 15000
 
+# Cache directory for persistent storage
+CACHE_DIR = "screening_cache"
+
+def ensure_cache_dir():
+    """Create cache directory if it doesn't exist."""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+def save_results_to_cache(results, criteria):
+    """Save screening results to disk cache."""
+    ensure_cache_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    cache_data = {
+        'results': results,
+        'criteria': criteria,
+        'timestamp': datetime.now().isoformat(),
+        'files': list(results.keys())
+    }
+    
+    cache_file = os.path.join(CACHE_DIR, f"screening_{timestamp}.json")
+    with open(cache_file, 'w', encoding='utf-8') as f:
+        json.dump(cache_data, f, indent=2)
+    
+    return cache_file
+
+def load_cached_results():
+    """Load all cached results from disk."""
+    ensure_cache_dir()
+    cached_sessions = []
+    
+    for filename in os.listdir(CACHE_DIR):
+        if filename.startswith("screening_") and filename.endswith(".json"):
+            filepath = os.path.join(CACHE_DIR, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    cached_sessions.append({
+                        'filename': filename,
+                        'filepath': filepath,
+                        'timestamp': data.get('timestamp', ''),
+                        'files': data.get('files', []),
+                        'data': data
+                    })
+            except Exception as e:
+                st.error(f"Error loading cached file {filename}: {e}")
+    
+    # Sort by timestamp (newest first)
+    cached_sessions.sort(key=lambda x: x['timestamp'], reverse=True)
+    return cached_sessions
+
+def load_session_from_cache(cache_data):
+    """Load a specific cached session into current session state."""
+    st.session_state['screening_results'] = cache_data['results']
+    st.session_state['used_criteria'] = cache_data['criteria']
+
 def load_default_criteria():
     """Load the default criteria from criteria.json"""
     try:
@@ -204,12 +260,17 @@ def main():
     st.title("🌱 Renewable Energy Project Document Screener")
     st.markdown("Upload documents and screen them against renewable energy project criteria using AI analysis.")
     
+    # Load cached results on startup
+    if 'cached_sessions' not in st.session_state:
+        st.session_state['cached_sessions'] = load_cached_results()
+    
     # Sidebar for navigation
     st.sidebar.title("Navigation")
     page = st.sidebar.selectbox("Choose a page", [
         "📄 Document Screening", 
         "📊 Results Analysis",
-        "✍️ Marketing Blurb Generator"
+        "✍️ Marketing Blurb Generator",
+        "💾 Cached Results"
     ])
     
     if page == "📄 Document Screening":
@@ -218,6 +279,8 @@ def main():
         results_analysis_page()
     elif page == "✍️ Marketing Blurb Generator":
         marketing_blurb_page()
+    elif page == "💾 Cached Results":
+        cached_results_page()
 
 def document_screening_page():
     st.header("Document Screening")
@@ -311,10 +374,20 @@ def document_screening_page():
             st.session_state['screening_results'] = results
             st.session_state['used_criteria'] = criteria
             
-            # Display summary
-            if results:
+            # Auto-save to cache
+            try:
+                cache_file = save_results_to_cache(results, criteria)
                 st.success(f"✅ Successfully screened {len(results)} document(s)")
-                st.info("💡 Go to the 'Results Analysis' page to view detailed results.")
+                st.success(f"💾 Results automatically saved to cache")
+                
+                # Refresh cached sessions list
+                st.session_state['cached_sessions'] = load_cached_results()
+                
+            except Exception as e:
+                st.success(f"✅ Successfully screened {len(results)} document(s)")
+                st.warning(f"⚠️ Could not save to cache: {e}")
+            
+            st.info("💡 Go to the 'Results Analysis' page to view detailed results.")
 
 def results_analysis_page():
     st.header("Results Analysis")
@@ -471,6 +544,66 @@ def marketing_blurb_page():
                 )
             else:
                 st.warning("⚠️ Generated blurb is empty. Try generating again.")
+
+def cached_results_page():
+    st.header("💾 Cached Results")
+    
+    cached_sessions = st.session_state['cached_sessions']
+    
+    if not cached_sessions:
+        st.info("No cached results available. Complete a document screening to create cached results.")
+        return
+    
+    st.write(f"Found {len(cached_sessions)} cached analysis sessions:")
+    
+    # Display cached sessions in a more user-friendly way
+    for i, session in enumerate(cached_sessions):
+        timestamp = datetime.fromisoformat(session['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
+        files = session['files']
+        
+        with st.expander(f"📋 Session {i+1}: {timestamp} - {len(files)} file(s)"):
+            st.write(f"**Files analyzed:** {', '.join(files)}")
+            st.write(f"**Criteria used:** {len(session['data']['criteria'])} criteria")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button(f"Load Session {i+1}", key=f"load_{i}"):
+                    load_session_from_cache(session['data'])
+                    st.success("✅ Session loaded! Go to Results Analysis to view.")
+                    st.rerun()
+            
+            with col2:
+                if st.button(f"Delete Session {i+1}", key=f"delete_{i}"):
+                    try:
+                        os.remove(session['filepath'])
+                        st.session_state['cached_sessions'] = load_cached_results()
+                        st.success("🗑️ Session deleted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting session: {e}")
+    
+    # Cache management
+    st.subheader("🧹 Cache Management")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 Refresh Cache List"):
+            st.session_state['cached_sessions'] = load_cached_results()
+            st.success("Cache list refreshed!")
+            st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Clear All Cache", type="secondary"):
+            if st.confirm("Are you sure you want to delete all cached results?"):
+                try:
+                    for session in cached_sessions:
+                        os.remove(session['filepath'])
+                    st.session_state['cached_sessions'] = []
+                    st.success("All cache cleared!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error clearing cache: {e}")
 
 if __name__ == "__main__":
     main() 
