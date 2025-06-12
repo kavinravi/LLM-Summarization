@@ -156,6 +156,48 @@ def create_results_dataframe(formatted_results):
     
     return pd.DataFrame(data)
 
+def consolidate_chunk_results(verdicts, criteria):
+    """Consolidate results from all chunks into one final verdict per criterion."""
+    consolidated = {}
+    
+    for criterion in criteria:
+        # Collect all verdicts and reasons for this criterion across chunks
+        all_verdicts = []
+        all_reasons = []
+        
+        for chunk_name, chunk_results in verdicts.items():
+            if criterion in chunk_results:
+                result = chunk_results[criterion]
+                verdict = result.get('verdict', 'unknown')
+                reason = result.get('reason', '')
+                all_verdicts.append(verdict)
+                all_reasons.append(reason)
+        
+        # Determine final verdict (if any chunk says 'yes', it's a pass)
+        yes_count = all_verdicts.count('yes')
+        no_count = all_verdicts.count('no')
+        
+        if yes_count > 0:
+            final_verdict = 'PASS'
+            # Find the best 'yes' reason
+            positive_reasons = [r for i, r in enumerate(all_reasons) if all_verdicts[i] == 'yes']
+            final_reason = positive_reasons[0] if positive_reasons else 'Criterion met in document'
+        elif no_count > 0:
+            final_verdict = 'FAIL'
+            # Combine the 'no' reasons
+            negative_reasons = [r for i, r in enumerate(all_reasons) if all_verdicts[i] == 'no']
+            final_reason = negative_reasons[0] if negative_reasons else 'Criterion not met in document'
+        else:
+            final_verdict = 'UNKNOWN'
+            final_reason = 'Insufficient information to determine compliance'
+        
+        consolidated[criterion] = {
+            'verdict': final_verdict,
+            'reason': final_reason
+        }
+    
+    return consolidated
+
 # Main app
 def main():
     # Header
@@ -166,15 +208,12 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.selectbox("Choose a page", [
         "📄 Document Screening", 
-        "📝 Manage Criteria", 
         "📊 Results Analysis",
         "✍️ Marketing Blurb Generator"
     ])
     
     if page == "📄 Document Screening":
         document_screening_page()
-    elif page == "📝 Manage Criteria":
-        manage_criteria_page()
     elif page == "📊 Results Analysis":
         results_analysis_page()
     elif page == "✍️ Marketing Blurb Generator":
@@ -274,66 +313,8 @@ def document_screening_page():
             
             # Display summary
             if results:
-                st.subheader("📊 Screening Summary")
-                
-                for filename, result in results.items():
-                    with st.expander(f"Results for {filename}"):
-                        formatted_results = format_verdict_results(result['verdicts'])
-                        df = create_results_dataframe(formatted_results)
-                        st.dataframe(df, use_container_width=True)
-                
-                st.info("💡 Go to the 'Results Analysis' page for detailed results and download options.")
-
-def manage_criteria_page():
-    st.header("Manage Screening Criteria")
-    
-    # Load current criteria
-    default_criteria = load_default_criteria()
-    
-    st.subheader("Current Default Criteria")
-    
-    # Display current criteria with edit capability
-    edited_criteria = []
-    
-    for i, criterion in enumerate(default_criteria):
-        col1, col2 = st.columns([4, 1])
-        
-        with col1:
-            edited_criterion = st.text_input(
-                f"Criterion {i+1}",
-                value=criterion,
-                key=f"criterion_{i}",
-                label_visibility="collapsed"
-            )
-            edited_criteria.append(edited_criterion)
-        
-        with col2:
-            if st.button("🗑️", key=f"delete_{i}", help="Delete this criterion"):
-                st.session_state[f'delete_{i}'] = True
-    
-    # Remove deleted criteria
-    edited_criteria = [
-        criterion for i, criterion in enumerate(edited_criteria)
-        if not st.session_state.get(f'delete_{i}', False)
-    ]
-    
-    # Add new criterion
-    st.subheader("Add New Criterion")
-    new_criterion = st.text_input("Enter new criterion:")
-    
-    if st.button("➕ Add Criterion") and new_criterion.strip():
-        edited_criteria.append(new_criterion.strip())
-        st.success("Criterion added!")
-    
-    # Save changes
-    if st.button("💾 Save Changes", type="primary"):
-        try:
-            with open("criteria.json", "w") as f:
-                json.dump(edited_criteria, f, indent=2)
-            st.success("✅ Criteria saved successfully!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"❌ Error saving criteria: {str(e)}")
+                st.success(f"✅ Successfully screened {len(results)} document(s)")
+                st.info("💡 Go to the 'Results Analysis' page to view detailed results.")
 
 def results_analysis_page():
     st.header("Results Analysis")
@@ -343,6 +324,7 @@ def results_analysis_page():
         return
     
     results = st.session_state['screening_results']
+    criteria = st.session_state.get('used_criteria', [])
     
     # File selection
     selected_file = st.selectbox(
@@ -353,26 +335,43 @@ def results_analysis_page():
     if selected_file:
         result = results[selected_file]
         
-        # Overview metrics
-        st.subheader("📊 Overview")
+        # Consolidate all chunk results into final verdicts
+        consolidated = consolidate_chunk_results(result['verdicts'], criteria)
         
-        formatted_results = format_verdict_results(result['verdicts'])
-        df = create_results_dataframe(formatted_results)
+        st.subheader("📋 Final Analysis Results")
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        total_criteria = len(formatted_results)
-        passed_criteria = len(df[df['Overall Verdict'] == 'PASS'])
-        pass_rate = (passed_criteria / total_criteria * 100) if total_criteria > 0 else 0
-        
-        col1.metric("Total Criteria", total_criteria)
-        col2.metric("Passed Criteria", passed_criteria)
-        col3.metric("Overall Pass Rate", f"{pass_rate:.1f}%")
-        col4.metric("Total Chunks", len(result['verdicts']))
-        
-        # Detailed results table
-        st.subheader("📋 Detailed Results")
-        st.dataframe(df, use_container_width=True)
+        # Display each criterion with its final verdict
+        for criterion, analysis in consolidated.items():
+            verdict = analysis['verdict']
+            reason = analysis['reason']
+            
+            # Color code the verdict
+            if verdict == 'PASS':
+                verdict_display = "✅ **PASS**"
+                color = "#039125"
+            elif verdict == 'FAIL':
+                verdict_display = "❌ **FAIL**"
+                color = "#8f010e"
+            else:
+                verdict_display = "❓ **UNKNOWN**"
+                color = "#b08704"
+            
+            # Display in a nice card format
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: {color};
+                    border-radius: 5px;
+                    padding: 15px;
+                    margin: 10px 0;
+                    border-left: 4px solid #6c757d;
+                ">
+                <strong>{criterion}</strong><br/>
+                {verdict_display}: {reason}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         
         # Download options
         st.subheader("📥 Download Results")
@@ -380,23 +379,30 @@ def results_analysis_page():
         col1, col2 = st.columns(2)
         
         with col1:
-            # Download as JSON
-            results_json = json.dumps(result['verdicts'], indent=2)
+            # Download consolidated results as JSON
+            consolidated_json = json.dumps(consolidated, indent=2)
             st.download_button(
-                "📄 Download Full Results (JSON)",
-                data=results_json,
-                file_name=f"screening_results_{selected_file}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                "📄 Download Final Results (JSON)",
+                data=consolidated_json,
+                file_name=f"final_analysis_{selected_file}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json"
             )
         
         with col2:
-            # Download summary as CSV
-            csv = df.to_csv(index=False)
+            # Download as readable summary
+            summary_text = f"Final Analysis Results for {selected_file}\n"
+            summary_text += f"Processed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            
+            for criterion, analysis in consolidated.items():
+                summary_text += f"{criterion}:\n"
+                summary_text += f"  Verdict: {analysis['verdict']}\n"
+                summary_text += f"  Reasoning: {analysis['reason']}\n\n"
+            
             st.download_button(
-                "📊 Download Summary (CSV)",
-                data=csv,
-                file_name=f"screening_summary_{selected_file}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
+                "📊 Download Summary (TXT)",
+                data=summary_text,
+                file_name=f"final_summary_{selected_file}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain"
             )
 
 def marketing_blurb_page():
@@ -427,6 +433,10 @@ def marketing_blurb_page():
                 try:
                     blurb = deepseek_blurb(result['verdicts'], temperature)
                     
+                    # Store blurb in session state
+                    st.session_state['generated_blurb'] = blurb
+                    st.session_state['blurb_filename'] = selected_file
+                    
                     st.subheader("📝 Generated Marketing Blurb")
                     
                     # Display blurb in a nice box
@@ -446,16 +456,21 @@ def marketing_blurb_page():
                         unsafe_allow_html=True
                     )
                     
-                    # Download option
-                    st.download_button(
-                        "📥 Download Blurb",
-                        data=blurb,
-                        file_name=f"marketing_blurb_{selected_file}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                        mime="text/plain"
-                    )
-                    
                 except Exception as e:
                     st.error(f"❌ Error generating blurb: {str(e)}")
+        
+        # Show download button if blurb exists
+        if 'generated_blurb' in st.session_state and st.session_state.get('blurb_filename') == selected_file:
+            blurb_content = st.session_state['generated_blurb']
+            if blurb_content and blurb_content.strip():
+                st.download_button(
+                    "📥 Download Blurb",
+                    data=blurb_content,
+                    file_name=f"marketing_blurb_{selected_file}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain"
+                )
+            else:
+                st.warning("⚠️ Generated blurb is empty. Try generating again.")
 
 if __name__ == "__main__":
     main() 
