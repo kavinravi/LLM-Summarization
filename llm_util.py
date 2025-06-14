@@ -128,6 +128,10 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
 
     # For Streamlit debugging
     debug_messages = []
+    debug_messages.append(f"DEBUG: Starting screening with {len(criteria)} criteria")
+    debug_messages.append(f"DEBUG: Criteria: {criteria}")
+    debug_messages.append(f"DEBUG: Chunk length: {len(chunk)} chars")
+    debug_messages.append(f"DEBUG: Model: {model}, Temperature: {temperature}, Max rounds: {max_rounds}")
     
     for round_num in range(max_rounds):
         debug_msg = f"DEBUG: Round {round_num + 1}/{max_rounds}"
@@ -185,32 +189,65 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             # Otherwise, try to parse the assistant content as JSON answer
             if msg.content:
                 debug_messages.append(f"DEBUG: Attempting to parse JSON response")
-                debug_messages.append(f"DEBUG: Response preview: {msg.content[:200]}...")
+                debug_messages.append(f"DEBUG: Full response content: {repr(msg.content)}")
+                
+                # Try to clean up the response if it has markdown formatting
+                content = msg.content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+                
+                debug_messages.append(f"DEBUG: Cleaned content: {repr(content)}")
                 
                 try:
-                    result = json.loads(msg.content)
+                    result = json.loads(content)
+                    debug_messages.append(f"DEBUG: JSON parsing successful, type: {type(result)}")
                     if isinstance(result, dict):
                         debug_messages.append(f"DEBUG: Successfully parsed JSON with {len(result)} items")
+                        debug_messages.append(f"DEBUG: JSON keys: {list(result.keys())}")
+                        
+                        # Check if any keys match our criteria
+                        matching_criteria = [crit for crit in criteria if crit in result]
+                        debug_messages.append(f"DEBUG: Matching criteria found: {len(matching_criteria)}")
+                        
                         # Store debug info for potential display
                         result['_debug'] = debug_messages
                         # Ensure every criterion is present; if missing, mark unknown
                         for crit in criteria:
-                            result.setdefault(crit, {"verdict": "unknown", "reason": "Not mentioned"})
+                            if crit not in result:
+                                debug_messages.append(f"DEBUG: Missing criterion '{crit}', adding as unknown")
+                                result[crit] = {"verdict": "unknown", "reason": "Not mentioned"}
                         return result
+                    else:
+                        debug_messages.append(f"DEBUG: JSON result is not a dict: {type(result)}")
                 except json.JSONDecodeError as e:
                     debug_messages.append(f"DEBUG: JSON parse error: {e}")
+                    debug_messages.append(f"DEBUG: Problematic content: {repr(content[:500])}")
                     # fall through to retry
                     pass
+            else:
+                debug_messages.append(f"DEBUG: No content in message")
 
             # Append the assistant content and retry (may help the model)
             messages.append({"role": "assistant", "content": msg.content or ""})
             
         except Exception as e:
-            debug_messages.append(f"DEBUG: API call error in round {round_num + 1}: {e}")
+            debug_messages.append(f"DEBUG: API call error in round {round_num + 1}: {type(e).__name__}: {e}")
+            import traceback
+            debug_messages.append(f"DEBUG: Traceback: {traceback.format_exc()}")
             break
 
     # Fallback if all rounds exhausted
     debug_messages.append(f"DEBUG: All rounds exhausted, returning fallback")
+    debug_messages.append(f"DEBUG: Final message count: {len(messages)}")
+    debug_messages.append(f"DEBUG: Message roles: {[m.get('role', 'unknown') for m in messages]}")
+    if messages:
+        last_msg = messages[-1]
+        debug_messages.append(f"DEBUG: Last message role: {last_msg.get('role')}")
+        debug_messages.append(f"DEBUG: Last message content preview: {str(last_msg.get('content', ''))[:200]}")
+    
     fallback_result = {c: {"verdict": "unknown", "reason": "Could not evaluate"} for c in criteria}
     fallback_result['_debug'] = debug_messages
     return fallback_result
