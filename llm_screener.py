@@ -304,7 +304,8 @@ def document_screening_page():
     )
     
     # Criteria selection
-    st.subheader("Screening Criteria")
+    st.subheader("📋 Screening Criteria")
+    st.markdown("---")  # Visual separator
     
     col1, col2 = st.columns([3, 1])
     
@@ -312,16 +313,28 @@ def document_screening_page():
         # Load default criteria
         default_criteria = load_default_criteria()
         
+        # Format criteria with numbers for better readability
+        formatted_criteria = []
+        for i, criterion in enumerate(default_criteria, 1):
+            formatted_criteria.append(f"{i}. {criterion}")
+        
         # Allow users to modify criteria
         criteria_text = st.text_area(
             "Edit criteria (one per line):",
-            value="\n".join(default_criteria),
-            height=300,
-            help="Each line represents one screening criterion. Edit as needed."
+            value="\n\n".join(formatted_criteria),  # Double line breaks for better separation
+            height=400,  # Increased height to accommodate better formatting
+            help="Each line represents one screening criterion. Edit as needed. Numbers are for readability only."
         )
         
-        # Parse criteria from text area
-        criteria = [line.strip() for line in criteria_text.split('\n') if line.strip()]
+        # Parse criteria from text area (remove numbering)
+        raw_lines = [line.strip() for line in criteria_text.split('\n') if line.strip()]
+        criteria = []
+        for line in raw_lines:
+            # Remove numbering if present (e.g., "1. " or "1) ")
+            import re
+            cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', line)
+            if cleaned_line:
+                criteria.append(cleaned_line)
     
     with col2:
         st.markdown("**Criteria Management**")
@@ -355,8 +368,15 @@ def document_screening_page():
         criteria = [line.strip() for line in criteria_text.split('\n') if line.strip()]
         del st.session_state['custom_criteria']
     
-    # Display number of criteria
+    # Display number of criteria and preview
     st.info(f"📋 {len(criteria)} criteria loaded")
+    
+    # Show a nice preview of the criteria
+    if criteria:
+        with st.expander("👀 Preview Current Criteria", expanded=False):
+            for i, criterion in enumerate(criteria, 1):
+                st.markdown(f"**{i}.** {criterion}")
+            st.caption("These are the criteria that will be used for screening.")
     
     # Screening section
     if uploaded_files and criteria:
