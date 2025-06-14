@@ -21,8 +21,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+def get_env_var(key: str, default: str = "") -> str:
+    """Get environment variable from Streamlit secrets or .env file."""
+    try:
+        import streamlit as st
+        return st.secrets[key]
+    except:
+        return os.getenv(key, default)
+
 BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
-BRAVE_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
+BRAVE_KEY = get_env_var("BRAVE_SEARCH_API_KEY", "")
 HEADERS = {
     "Accept": "application/json",
     "Accept-Encoding": "gzip",

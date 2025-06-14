@@ -26,13 +26,21 @@ from typing import Optional  # For Python <3.10 union
 # ---------- ENVIRONMENT ----------
 load_dotenv()  # Load environment variables from .env file
 
+def get_env_var(key: str, default: str = None) -> str:
+    """Get environment variable from Streamlit secrets or .env file."""
+    try:
+        import streamlit as st
+        return st.secrets[key]
+    except:
+        return os.getenv(key, default)
+
 # Allow model names to be overridden via env for easy experimentation
-FAST_MODEL = os.getenv("DEEPSEEK_FAST_MODEL", "deepseek-chat")      # low-latency model (8k context)
-SLOW_MODEL = os.getenv("DEEPSEEK_SLOW_MODEL", "deepseek-reasoner")  # high-accuracy model (64k context)
+FAST_MODEL = get_env_var("DEEPSEEK_FAST_MODEL", "deepseek-chat")      # low-latency model (8k context)
+SLOW_MODEL = get_env_var("DEEPSEEK_SLOW_MODEL", "deepseek-reasoner")  # high-accuracy model (64k context)
 
 client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL")
+    api_key=get_env_var("OPENAI_API_KEY"),
+    base_url=get_env_var("OPENAI_BASE_URL")
 )
 
 MAX_INPUT_TOKENS = 64000
