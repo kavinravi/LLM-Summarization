@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# deepseek_util.py
+# llm_util.py
 """
 Utility for:
 1.  Screening PDFs/DOCX/XLSX against yes/no criteria (temperature = 0).
@@ -8,10 +8,10 @@ Utility for:
 Usage examples
 --------------
 # Compliance screen:
-python deepseek_util.py screen my_memo.pdf --criteria_file criteria.json
+python llm_util.py screen my_memo.pdf --criteria_file criteria.json
 
 # Marketing blurb (uses prior JSON verdict):
-python deepseek_util.py blurb verdict.json --temp 0.7
+python llm_util.py blurb verdict.json --temp 0.7
 """
 # Python <3.10 compatibility for type-hints
 from __future__ import annotations
@@ -34,18 +34,17 @@ def get_env_var(key: str, default: str = None) -> str:
     except:
         return os.getenv(key, default)
 
-# Allow model names to be overridden via env for easy experimentation
-FAST_MODEL = get_env_var("DEEPSEEK_FAST_MODEL", "deepseek-chat")      # low-latency model (8k context)
-SLOW_MODEL = get_env_var("DEEPSEEK_SLOW_MODEL", "deepseek-reasoner")  # high-accuracy model (64k context)
+# Single model configuration
+MODEL = get_env_var("OPENAI_MODEL", "gpt-4o")
 
 client = OpenAI(
     api_key=get_env_var("OPENAI_API_KEY"),
     base_url=get_env_var("OPENAI_BASE_URL")
 )
 
-MAX_INPUT_TOKENS = 64000
-# 6 000 chars ≈ 4.5-5 k tokens – safe for the chat model's 8k window
-CHUNK_SIZE_CHARS = 6000
+MAX_INPUT_TOKENS = 128000
+# 20 000 chars ≈ 15k tokens – much larger chunks possible with GPT-4o's 128k window
+CHUNK_SIZE_CHARS = 20000
 
 
 # ---------- FILE I/O ----------
@@ -62,10 +61,10 @@ def extract_text(path: str) -> str:
     raise ValueError(f"Unsupported file type: {ext}")
 
 
-# ---------- DEEPSEEK CALLS ----------
+# ---------- LLM CALLS ----------
 def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_mode: bool = False, model: Optional[str] = None):
     params = {
-        "model": model or SLOW_MODEL,
+        "model": model or MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -97,7 +96,7 @@ def _web_search_function_spec():
     ]
 
 
-# ---------------- HYBRID SCREENING -----------------
+# ---------------- LLM SCREENING -----------------
 
 def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature: float, max_rounds: int) -> dict:
     """Internal helper that runs the full tool-calling loop with a given model."""
@@ -179,30 +178,14 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     return {c: {"verdict": "unknown", "reason": "Could not evaluate"} for c in criteria}
 
 
-def deepseek_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 4) -> dict:
-    """Hybrid strategy: try fast chat model first, fall back to reasoner for unknowns."""
-
-    # 1) fast path
-    fast_result = _screen_with_model(chunk, criteria, FAST_MODEL, temperature, max_rounds)
-
-    # If every verdict is yes or no, return immediately
-    unknowns = [v for v in fast_result.values() if v.get("verdict") not in ("yes", "no")]
-    if not unknowns:
-        return fast_result
-
-    # 2) slow path for undecided criteria
-    slow_result = _screen_with_model(chunk, criteria, SLOW_MODEL, temperature, max_rounds)
-
-    # Merge – prefer fast verdicts unless they are unknown/error
-    merged = {}
-    for crit in criteria:
-        merged[crit] = fast_result.get(crit) or {"verdict": "unknown", "reason": ""}
-        if merged[crit].get("verdict") not in ("yes", "no"):
-            merged[crit] = slow_result.get(crit, merged[crit])
-    return merged
+def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 4) -> dict:
+    """Single-model screening with web search capability."""
+    
+    # Use single model with web search capability
+    return _screen_with_model(chunk, criteria, MODEL, temperature, max_rounds)
 
 
-def deepseek_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
+def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
     prompt = (
         "You are a copywriter for a renewable-energy SaaS startup.\n"
         "Write a concise (≤ 120 words) marketing blurb that:\n"
@@ -216,7 +199,7 @@ def deepseek_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
 
 # ---------- CLI ----------
 def parse_args():
-    p = argparse.ArgumentParser(description="DeepSeek screening + marketing helper")
+    p = argparse.ArgumentParser(description="LLM screening + marketing helper")
     sub = p.add_subparsers(dest="mode", required=True)
 
     # Screen sub-command
@@ -250,7 +233,7 @@ def main():
         # Extract and chunk text
         raw = extract_text(args.file)
         chunks = textwrap.wrap(raw, CHUNK_SIZE_CHARS)
-        verdicts = {f"chunk_{i}": deepseek_screen(c, criteria) for i, c in enumerate(chunks, 1)}
+        verdicts = {f"chunk_{i}": llm_screen(c, criteria) for i, c in enumerate(chunks, 1)}
 
         # Save
         with open(args.out, "w") as f:
@@ -260,9 +243,9 @@ def main():
     elif args.mode == "blurb":
         with open(args.verdict_json, encoding="utf-8") as f:
             verdict = json.load(f)
-        blurb = deepseek_blurb(verdict, temperature=args.temp)
+        blurb = llm_blurb(verdict, temperature=args.temp)
         print("\n" + blurb + "\n")
 
 
 if __name__ == "__main__":
-    main()
+    main() 
