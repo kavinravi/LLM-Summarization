@@ -76,22 +76,25 @@ def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_
     return resp.choices[0].message.content.strip()
 
 
-def _web_search_function_spec():
-    """Return OpenAI function spec for web_search."""
+def _web_search_tool_spec():
+    """Return OpenAI tools spec for web_search."""
     return [
         {
-            "name": "web_search",
-            "description": "Search the public web when additional factual information is required.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to look up on the web."
-                    }
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the public web when additional factual information is required.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to look up on the web."
+                        }
+                    },
+                    "required": ["query"]
                 },
-                "required": ["query"]
-            },
+            }
         }
     ]
 
@@ -120,69 +123,91 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         {"role": "user", "content": user_prompt},
     ]
 
-    function_spec = _web_search_function_spec()
+    tools = _web_search_tool_spec()
 
-    for _ in range(max_rounds):
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            functions=function_spec,
-            temperature=temperature,
-            max_tokens=4096,
-        )
+    for round_num in range(max_rounds):
+        print(f"DEBUG: Round {round_num + 1}/{max_rounds}")
+        
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=temperature,
+                max_tokens=4096,
+            )
 
-        msg = response.choices[0].message
+            msg = response.choices[0].message
+            print(f"DEBUG: Got response, content length: {len(msg.content or '')}")
+            print(f"DEBUG: Has tool calls: {bool(getattr(msg, 'tool_calls', None))}")
 
-        # If the model wants to call the web_search tool
-        if getattr(msg, "tool_calls", None):
-            messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [tc.to_dict() for tc in msg.tool_calls],  # type: ignore
-            })
-
-            for tc in msg.tool_calls:  # type: ignore
-                try:
-                    arguments = json.loads(tc.arguments)
-                    query = arguments["query"]
-                except Exception:
-                    query = tc.arguments if isinstance(tc.arguments, str) else str(tc.arguments)
-
-                results_text = web_search(query)
+            # If the model wants to call the web_search tool
+            if getattr(msg, "tool_calls", None):
+                print(f"DEBUG: Processing {len(msg.tool_calls)} tool calls")
                 messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,  # type: ignore
-                    "name": tc.name,
-                    "content": results_text,
+                    "role": "assistant",
+                    "content": msg.content,
+                    "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
                 })
-            # go to next round
-            continue
 
-        # Otherwise, try to parse the assistant content as JSON answer
-        if msg.content:
-            try:
-                result = json.loads(msg.content)
-                if isinstance(result, dict):
-                    # Ensure every criterion is present; if missing, mark unknown
-                    for crit in criteria:
-                        result.setdefault(crit, {"verdict": "unknown", "reason": "Not mentioned"})
-                    return result
-            except json.JSONDecodeError:
-                # fall through to retry
-                pass
+                for tc in msg.tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                        query = arguments["query"]
+                        print(f"DEBUG: Web search query: {query}")
+                    except Exception as e:
+                        print(f"DEBUG: Error parsing arguments: {e}")
+                        query = tc.function.arguments if isinstance(tc.function.arguments, str) else str(tc.function.arguments)
 
-        # Append the assistant content and retry (may help the model)
-        messages.append({"role": "assistant", "content": msg.content or ""})
+                    results_text = web_search(query)
+                    print(f"DEBUG: Search results length: {len(results_text)}")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": results_text,
+                    })
+                # go to next round
+                continue
+
+            # Otherwise, try to parse the assistant content as JSON answer
+            if msg.content:
+                print(f"DEBUG: Attempting to parse JSON response")
+                print(f"DEBUG: Response content preview: {msg.content[:200]}...")
+                
+                try:
+                    result = json.loads(msg.content)
+                    if isinstance(result, dict):
+                        print(f"DEBUG: Successfully parsed JSON with {len(result)} items")
+                        # Ensure every criterion is present; if missing, mark unknown
+                        for crit in criteria:
+                            result.setdefault(crit, {"verdict": "unknown", "reason": "Not mentioned"})
+                        return result
+                except json.JSONDecodeError as e:
+                    print(f"DEBUG: JSON parse error: {e}")
+                    # fall through to retry
+                    pass
+
+            # Append the assistant content and retry (may help the model)
+            messages.append({"role": "assistant", "content": msg.content or ""})
+            
+        except Exception as e:
+            print(f"DEBUG: API call error in round {round_num + 1}: {e}")
+            break
 
     # Fallback if all rounds exhausted
+    print(f"DEBUG: All rounds exhausted, returning fallback")
     return {c: {"verdict": "unknown", "reason": "Could not evaluate"} for c in criteria}
 
 
 def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 4) -> dict:
     """Single-model screening with web search capability."""
     
-    # Use single model with web search capability
+    # Use web search version directly to test the fixes
     return _screen_with_model(chunk, criteria, MODEL, temperature, max_rounds)
+
+
+
 
 
 def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
