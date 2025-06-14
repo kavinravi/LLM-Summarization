@@ -20,7 +20,7 @@ import os, json, textwrap, argparse
 import pdfplumber, docx, pandas as pd
 from openai import OpenAI
 from dotenv import load_dotenv
-from search_tool import web_search  # NEW IMPORT
+# Import web_search locally when needed to avoid import issues
 from typing import Optional  # For Python <3.10 union
 
 # ---------- ENVIRONMENT ----------
@@ -165,7 +165,14 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                         debug_messages.append(f"DEBUG: Error parsing arguments: {e}")
                         query = tc.function.arguments if isinstance(tc.function.arguments, str) else str(tc.function.arguments)
 
-                    results_text = web_search(query)
+                    # Import web_search locally to avoid import issues
+                    try:
+                        from search_tool import web_search
+                        results_text = web_search(query)
+                    except ImportError as e:
+                        debug_messages.append(f"DEBUG: Could not import web_search: {e}")
+                        results_text = f"Web search unavailable for query: {query}"
+                    
                     debug_messages.append(f"DEBUG: Search results length: {len(results_text)}")
                     messages.append({
                         "role": "tool",
