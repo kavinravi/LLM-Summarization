@@ -318,26 +318,59 @@ def document_screening_page():
         for i, criterion in enumerate(default_criteria, 1):
             formatted_criteria.append(f"{i}. {criterion}")
         
-        # Allow users to modify criteria
+        # Use auto-formatted content if available, otherwise use default
+        display_value = st.session_state.get('auto_format_criteria', "\n\n".join(formatted_criteria))
+        
+        # Allow users to modify criteria with auto-numbering
         criteria_text = st.text_area(
             "Edit criteria (one per line):",
-            value="\n\n".join(formatted_criteria),  # Double line breaks for better separation
+            value=display_value,  # Use either auto-formatted or default
             height=400,  # Increased height to accommodate better formatting
-            help="Each line represents one screening criterion. Edit as needed. Numbers are for readability only."
+            help="Each line represents one screening criterion. Add new criteria on new lines, then click 'Auto-Number' to format!",
+            key="criteria_text_area"
         )
         
-        # Parse criteria from text area (remove numbering)
+        # Clear the auto-format state after using it
+        if 'auto_format_criteria' in st.session_state:
+            del st.session_state['auto_format_criteria']
+        
+        # Parse criteria from text area and auto-renumber
+        import re
         raw_lines = [line.strip() for line in criteria_text.split('\n') if line.strip()]
         criteria = []
+        
+        # Extract actual criteria content (remove any existing numbering)
         for line in raw_lines:
-            # Remove numbering if present (e.g., "1. " or "1) ")
-            import re
             cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', line)
             if cleaned_line:
                 criteria.append(cleaned_line)
+        
+        # Show auto-numbered preview of what they're editing
+        if criteria:
+            st.markdown("**✨ Auto-numbered preview:**")
+            preview_container = st.container()
+            with preview_container:
+                cols = st.columns(2)
+                for i, criterion in enumerate(criteria):
+                    col_idx = i % 2
+                    with cols[col_idx]:
+                        st.markdown(f"**{i+1}.** {criterion[:80]}{'...' if len(criterion) > 80 else ''}")
+            st.markdown("---")
     
     with col2:
         st.markdown("**Criteria Management**")
+        
+        # Auto-format button
+        if st.button("🔢 Auto-Number", help="Automatically format and number all criteria"):
+            if criteria:
+                # Re-format with proper numbering and spacing
+                formatted_criteria_new = []
+                for i, criterion in enumerate(criteria, 1):
+                    formatted_criteria_new.append(f"{i}. {criterion}")
+                # Update session state to trigger re-render
+                st.session_state['auto_format_criteria'] = "\n\n".join(formatted_criteria_new)
+                st.success("✨ Criteria auto-numbered!")
+                st.rerun()
         
         if st.button("📄 Load Default"):
             st.rerun()
