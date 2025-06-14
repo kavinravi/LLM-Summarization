@@ -1,4 +1,4 @@
-"""Lightweight web-search wrapper for DeepSeek tool calls.
+"""Lightweight web-search wrapper for LLM tool calls.
 
 Primary backend: Brave Search API (2 000 queries/month free).
 Fallback backend: DuckDuckGo instant-answer scrape via ``duckduckgo_search``.
