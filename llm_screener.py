@@ -494,7 +494,7 @@ def document_screening_page():
                         else:
                             return 'background-color: #fff3cd; color: #856404'
                     
-                    styled_df = df.style.applymap(highlight_verdict, subset=['Overall Verdict'])
+                    styled_df = df.style.map(highlight_verdict, subset=['Overall Verdict'])
                     st.dataframe(styled_df, use_container_width=True)
                     
                     # Download button for individual file results

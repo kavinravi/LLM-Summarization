@@ -107,6 +107,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     system_prompt = (
         "You are a project-diligence analyst.\n"
         "You will be given a document chunk and a list of renewable-energy siting criteria.\n"
+        "IMPORTANT: Be strategic about web searches - only search when truly necessary and try to group related questions into single searches.\n"
         "If the chunk lacks data needed to evaluate a criterion, you may call the `web_search` tool to look up the missing fact.\n"
         "When you have enough info, return ONLY JSON with this exact structure (no markdown, no extra text):\n"
         "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"short explanation\"},\n  ...one object per criterion...\n}\n"
@@ -208,7 +209,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     return fallback_result
 
 
-def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 4) -> dict:
+def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 3) -> dict:
     """Single-model screening with web search capability."""
     
     # Use web search version directly to test the fixes
