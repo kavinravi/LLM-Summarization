@@ -107,6 +107,8 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     system_prompt = (
         "You are a project-diligence analyst.\n"
         "You will be given a document chunk and a list of renewable-energy siting criteria.\n"
+        "CRITICAL: First analyze the document chunk thoroughly for relevant information. Only use web_search if specific facts are missing from the document.\n"
+        "The document likely contains project-specific details, locations, measurements, and other data needed for evaluation.\n"
         "IMPORTANT: Be strategic about web searches - only search when truly necessary and try to group related questions into single searches.\n"
         "If the chunk lacks data needed to evaluate a criterion, you may call the `web_search` tool to look up the missing fact.\n"
         "When you have enough info, return ONLY JSON with this exact structure (no markdown, no extra text):\n"
@@ -131,6 +133,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     debug_messages.append(f"DEBUG: Starting screening with {len(criteria)} criteria")
     debug_messages.append(f"DEBUG: Criteria: {criteria}")
     debug_messages.append(f"DEBUG: Chunk length: {len(chunk)} chars")
+    debug_messages.append(f"DEBUG: Chunk preview (first 500 chars): {repr(chunk[:500])}")
     debug_messages.append(f"DEBUG: Model: {model}, Temperature: {temperature}, Max rounds: {max_rounds}")
     
     for round_num in range(max_rounds):
@@ -178,6 +181,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                         results_text = f"Web search unavailable for query: {query}"
                     
                     debug_messages.append(f"DEBUG: Search results length: {len(results_text)}")
+                    debug_messages.append(f"DEBUG: Search results preview: {repr(results_text[:200])}")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
