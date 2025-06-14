@@ -219,7 +219,7 @@ def create_results_dataframe(formatted_results):
         total_chunks = result['yes_count'] + result['no_count']
         pass_rate = (result['yes_count'] / total_chunks * 100) if total_chunks > 0 else 0
         
-        overall_verdict = "PASS" if result['yes_count'] > result['no_count'] else "FAIL"
+        overall_verdict = "PASS" if result['yes_count'] > 0 else "FAIL"
         
         data.append({
             'Criterion': criterion,
@@ -531,7 +531,7 @@ def results_analysis_page():
         col1, col2, col3 = st.columns(3)
         
         total_criteria = len(formatted_results)
-        passed_criteria = sum(1 for r in formatted_results.values() if r['yes_count'] > r['no_count'])
+        passed_criteria = sum(1 for r in formatted_results.values() if r['yes_count'] > 0)
         failed_criteria = total_criteria - passed_criteria
         
         with col1:
