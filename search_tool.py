@@ -80,13 +80,18 @@ def _ddg_search(query: str, max_results: int = 5) -> List[str]:
     if DDGS is None:
         raise RuntimeError("duckduckgo_search package not installed")
 
-    with DDGS() as ddgs:
-        results = ddgs.text(query, max_results=max_results)
-    snippets = []
-    for r in results:
-        snippet = f"{r.get('title', '')}: {r.get('body', '')} ({r.get('href', '')})"
-        snippets.append(snippet)
-    return snippets
+    try:
+        with DDGS() as ddgs:
+            results = ddgs.text(query, max_results=max_results)
+        snippets = []
+        for r in results:
+            snippet = f"{r.get('title', '')}: {r.get('body', '')} ({r.get('href', '')})"
+            snippets.append(snippet)
+        logger.info(f"DuckDuckGo search returned {len(snippets)} results for: {query}")
+        return snippets
+    except Exception as e:
+        logger.warning(f"DuckDuckGo search failed for query '{query}': {e}")
+        return []
 
 
 def web_search(query: str, max_results: int = 5) -> str:

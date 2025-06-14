@@ -83,7 +83,7 @@ def _web_search_tool_spec():
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the public web when additional factual information is required.",
+                "description": "Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -107,10 +107,12 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     system_prompt = (
         "You are a project-diligence analyst.\n"
         "You will be given a document chunk and a list of renewable-energy siting criteria.\n"
-        "CRITICAL: First analyze the document chunk thoroughly for relevant information. Only use web_search if specific facts are missing from the document.\n"
-        "The document likely contains project-specific details, locations, measurements, and other data needed for evaluation.\n"
-        "IMPORTANT: Be strategic about web searches - only search when truly necessary and try to group related questions into single searches.\n"
-        "If the chunk lacks data needed to evaluate a criterion, you may call the `web_search` tool to look up the missing fact.\n"
+        "CRITICAL INSTRUCTIONS:\n"
+        "1. FIRST: Thoroughly analyze the document chunk for ALL relevant information - project locations, distances, measurements, environmental data, etc.\n"
+        "2. Look for indirect clues and inferences you can make from the document content.\n"
+        "3. ONLY use web_search as a last resort if absolutely critical information is completely missing from the document.\n"
+        "4. The document is an Environmental Assessment and likely contains most technical details needed for evaluation.\n"
+        "5. If you can make a reasonable determination from the document content, do NOT search the web.\n"
         "When you have enough info, return ONLY JSON with this exact structure (no markdown, no extra text):\n"
         "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"short explanation\"},\n  ...one object per criterion...\n}\n"
         "Every criterion listed below MUST appear once in the JSON, and the JSON **key must be copied verbatim from the list** (no re-phrasing or truncation).\n"
@@ -262,6 +264,66 @@ def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_ro
     
     # Use web search version directly to test the fixes
     return _screen_with_model(chunk, criteria, MODEL, temperature, max_rounds)
+
+
+def llm_screen_no_web(chunk: str, criteria: list[str], temperature: float = 0.0) -> dict:
+    """Document-only screening without web search capability."""
+    
+    system_prompt = (
+        "You are a project-diligence analyst.\n"
+        "You will be given a document chunk and a list of renewable-energy siting criteria.\n"
+        "CRITICAL: Analyze the document chunk thoroughly for ALL relevant information.\n"
+        "The document is an Environmental Assessment containing project-specific details, locations, measurements, environmental data, etc.\n"
+        "Make reasonable inferences from the available information. If specific data is not explicitly stated but can be reasonably inferred, make that inference.\n"
+        "When you have analyzed the document, return ONLY JSON with this exact structure (no markdown, no extra text):\n"
+        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"short explanation\"},\n  ...one object per criterion...\n}\n"
+        "Every criterion listed below MUST appear once in the JSON, and the JSON **key must be copied verbatim from the list** (no re-phrasing or truncation).\n"
+    )
+
+    user_prompt = (
+        f"Criteria:\n{json.dumps(criteria, indent=2)}\n\n"
+        f"Document chunk:\n{chunk}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=4096,
+        )
+
+        msg = response.choices[0].message
+        if msg.content:
+            # Try to clean up the response if it has markdown formatting
+            content = msg.content.strip()
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+            
+            try:
+                result = json.loads(content)
+                if isinstance(result, dict):
+                    # Ensure every criterion is present; if missing, mark unknown
+                    for crit in criteria:
+                        if crit not in result:
+                            result[crit] = {"verdict": "unknown", "reason": "Not mentioned"}
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+    except Exception:
+        pass
+
+    # Fallback
+    return {c: {"verdict": "unknown", "reason": "Could not evaluate"} for c in criteria}
 
 
 
