@@ -125,8 +125,12 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
 
     tools = _web_search_tool_spec()
 
+    # For Streamlit debugging
+    debug_messages = []
+    
     for round_num in range(max_rounds):
-        print(f"DEBUG: Round {round_num + 1}/{max_rounds}")
+        debug_msg = f"DEBUG: Round {round_num + 1}/{max_rounds}"
+        debug_messages.append(debug_msg)
         
         try:
             response = client.chat.completions.create(
@@ -139,12 +143,12 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             )
 
             msg = response.choices[0].message
-            print(f"DEBUG: Got response, content length: {len(msg.content or '')}")
-            print(f"DEBUG: Has tool calls: {bool(getattr(msg, 'tool_calls', None))}")
+            debug_messages.append(f"DEBUG: Got response, content length: {len(msg.content or '')}")
+            debug_messages.append(f"DEBUG: Has tool calls: {bool(getattr(msg, 'tool_calls', None))}")
 
             # If the model wants to call the web_search tool
             if getattr(msg, "tool_calls", None):
-                print(f"DEBUG: Processing {len(msg.tool_calls)} tool calls")
+                debug_messages.append(f"DEBUG: Processing {len(msg.tool_calls)} tool calls")
                 messages.append({
                     "role": "assistant",
                     "content": msg.content,
@@ -155,13 +159,13 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                     try:
                         arguments = json.loads(tc.function.arguments)
                         query = arguments["query"]
-                        print(f"DEBUG: Web search query: {query}")
+                        debug_messages.append(f"DEBUG: Web search query: {query}")
                     except Exception as e:
-                        print(f"DEBUG: Error parsing arguments: {e}")
+                        debug_messages.append(f"DEBUG: Error parsing arguments: {e}")
                         query = tc.function.arguments if isinstance(tc.function.arguments, str) else str(tc.function.arguments)
 
                     results_text = web_search(query)
-                    print(f"DEBUG: Search results length: {len(results_text)}")
+                    debug_messages.append(f"DEBUG: Search results length: {len(results_text)}")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -172,19 +176,21 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
 
             # Otherwise, try to parse the assistant content as JSON answer
             if msg.content:
-                print(f"DEBUG: Attempting to parse JSON response")
-                print(f"DEBUG: Response content preview: {msg.content[:200]}...")
+                debug_messages.append(f"DEBUG: Attempting to parse JSON response")
+                debug_messages.append(f"DEBUG: Response preview: {msg.content[:200]}...")
                 
                 try:
                     result = json.loads(msg.content)
                     if isinstance(result, dict):
-                        print(f"DEBUG: Successfully parsed JSON with {len(result)} items")
+                        debug_messages.append(f"DEBUG: Successfully parsed JSON with {len(result)} items")
+                        # Store debug info for potential display
+                        result['_debug'] = debug_messages
                         # Ensure every criterion is present; if missing, mark unknown
                         for crit in criteria:
                             result.setdefault(crit, {"verdict": "unknown", "reason": "Not mentioned"})
                         return result
                 except json.JSONDecodeError as e:
-                    print(f"DEBUG: JSON parse error: {e}")
+                    debug_messages.append(f"DEBUG: JSON parse error: {e}")
                     # fall through to retry
                     pass
 
@@ -192,12 +198,14 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             messages.append({"role": "assistant", "content": msg.content or ""})
             
         except Exception as e:
-            print(f"DEBUG: API call error in round {round_num + 1}: {e}")
+            debug_messages.append(f"DEBUG: API call error in round {round_num + 1}: {e}")
             break
 
     # Fallback if all rounds exhausted
-    print(f"DEBUG: All rounds exhausted, returning fallback")
-    return {c: {"verdict": "unknown", "reason": "Could not evaluate"} for c in criteria}
+    debug_messages.append(f"DEBUG: All rounds exhausted, returning fallback")
+    fallback_result = {c: {"verdict": "unknown", "reason": "Could not evaluate"} for c in criteria}
+    fallback_result['_debug'] = debug_messages
+    return fallback_result
 
 
 def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 4) -> dict:

@@ -124,7 +124,17 @@ def process_document(uploaded_file, criteria, progress_bar=None):
         for i, chunk in enumerate(chunks):
             chunk_name = f"chunk_{i+1}"
             try:
-                verdicts[chunk_name] = llm_screen(chunk, criteria)
+                chunk_result = llm_screen(chunk, criteria)
+                
+                # Display debug info if available
+                if '_debug' in chunk_result:
+                    with st.expander(f"🔍 Debug Info for {chunk_name}", expanded=False):
+                        for debug_msg in chunk_result['_debug']:
+                            st.text(debug_msg)
+                    # Remove debug from actual results
+                    del chunk_result['_debug']
+                
+                verdicts[chunk_name] = chunk_result
                 
                 if progress_bar:
                     progress = 60 + (30 * (i + 1) / len(chunks))
