@@ -36,6 +36,7 @@ def get_env_var(key: str, default: str = None) -> str:
 
 # Single model configuration
 MODEL = get_env_var("GEMINI_MODEL", "gemini-2.5-flash-preview")
+print(f"DEBUG: Loaded MODEL = {MODEL}")
 
 # Configure Gemini
 genai.configure(api_key=get_env_var("GOOGLE_API_KEY"))
@@ -120,6 +121,8 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         "    -   If the evidence contradicts the criterion, the verdict is 'no'.\n"
         "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'. For criteria that require specific numbers (e.g., cost, distance, capacity), if you cannot find a specific number, the verdict MUST be 'unknown'.\n"
         "\n"
+        "If a criterion requires quantitative data that is missing from the document **and** cannot be inferred logically, CALL the `web_search` tool to look up authoritative information (e.g., typical lease rates, official setback distances). Use at most one search query per missing criterion.\n"
+        "\n"
         "**Output Format:**\n"
         "Return ONLY a single JSON object. The keys must be the exact criterion strings.\n"
         "{\n"
@@ -138,7 +141,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         {"role": "user", "content": user_prompt},
     ]
 
-    tools = _web_search_tool_spec()
+    tool_spec = _web_search_tool_spec()
 
     # For Streamlit debugging
     debug_messages = []
@@ -148,9 +151,9 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     debug_messages.append(f"DEBUG: Chunk preview (first 500 chars): {repr(chunk[:500])}")
     debug_messages.append(f"DEBUG: Model: {model}, Temperature: {temperature}, Max rounds: {max_rounds}")
     
-    # Web search function for Gemini function calling
-    def web_search_func(query: str) -> str:
-        """Web search function for Gemini function calling."""
+    # Web search function for Gemini tool-calling
+    def web_search_func(query: str):
+        """Web search function for Gemini tool-calling."""
         debug_messages.append(f"DEBUG: Web search called with query: {query}")
         try:
             from search_tool import web_search
@@ -167,14 +170,15 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         "max_output_tokens": 4096,
     }
     
-    # Create model WITHOUT tools for now to restore basic functionality
+    # Create model WITH the web_search tool enabled
     gemini_model = genai.GenerativeModel(
         model_name=model,
+        tools=[tool_spec],
         generation_config=generation_config
     )
-    debug_messages.append(f"DEBUG: Created model without tools (temporarily disabled)")
+    debug_messages.append("DEBUG: Created model WITH web_search tool enabled")
     
-    # Create chat session
+    # Create chat session (tool execution handled manually in loop)
     chat = gemini_model.start_chat()
     
     for round_num in range(max_rounds):
@@ -188,8 +192,17 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             
             debug_messages.append(f"DEBUG: Got response, text length: {len(response.text or '')}")
             
-            # Function calling temporarily disabled - focus on getting basic analysis working
-            debug_messages.append(f"DEBUG: Function calling disabled - model should analyze document directly")
+            # Log if response includes a function call
+            if hasattr(response, "candidates") and response.candidates:
+                finish_val = getattr(response.candidates[0], "finish_reason", None)
+                if finish_val is not None:
+                    # Convert enum or object to string safely
+                    if hasattr(finish_val, "name"):
+                        finish_str = finish_val.name
+                    else:
+                        finish_str = str(finish_val)
+                    if "FUNCTION_CALL" in finish_str.upper():
+                        debug_messages.append("DEBUG: Model invoked web_search function")
             
             # Try to parse the response as JSON
             if response.text:

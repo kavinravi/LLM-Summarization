@@ -29,7 +29,7 @@ st.set_page_config(
 )
 
 # Constants
-CHUNK_SIZE_CHARS = 150000  # Gemini 2.0 Flash supports much larger context
+CHUNK_SIZE_CHARS = 150000  # Gemini 2.5 flash supports much larger context
 
 # Cache directory for persistent storage
 CACHE_DIR = "screening_cache"
