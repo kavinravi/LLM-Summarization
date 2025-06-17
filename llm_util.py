@@ -382,7 +382,6 @@ def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
     # Configure generation parameters
     generation_config = {
         "temperature": temperature,
-        "max_output_tokens": 256,
     }
     
     # Create model instance without tools (no web search needed for marketing copy)
@@ -398,25 +397,45 @@ def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
         
         # Try to get response text safely
         response_text = ""
+        finish_reason = None
+        
         if hasattr(response, 'candidates') and response.candidates:
             candidate = response.candidates[0]
+            finish_reason = getattr(candidate, 'finish_reason', None)
+            
+            # Log finish reason for debugging
+            if finish_reason is not None:
+                if hasattr(finish_reason, 'name'):
+                    finish_str = finish_reason.name
+                else:
+                    finish_str = str(finish_reason)
+                print(f"DEBUG: Marketing blurb finish reason: {finish_str}")
             
             try:
                 response_text = response.text or ""
+                print(f"DEBUG: Marketing blurb response length: {len(response_text)}")
             except (ValueError, AttributeError) as e:
+                print(f"DEBUG: Could not access response.text: {e}")
                 # Try to get text from parts directly
                 if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
                     for part in candidate.content.parts:
                         if hasattr(part, 'text') and part.text:
                             response_text += part.text
+                            print(f"DEBUG: Got text from part, length: {len(part.text)}")
+        else:
+            print("DEBUG: No candidates in response")
         
         if response_text:
             return response_text.strip()
         else:
-            return "Unable to generate marketing blurb - please try again."
+            error_msg = f"Unable to generate marketing blurb. Finish reason: {finish_reason}"
+            print(f"DEBUG: {error_msg}")
+            return error_msg
             
     except Exception as e:
-        return f"Error generating blurb: {str(e)}"
+        error_msg = f"Error generating blurb: {str(e)}"
+        print(f"DEBUG: {error_msg}")
+        return error_msg
 
 
 # ---------- CLI ----------
