@@ -87,20 +87,28 @@ def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_
 
 def _web_search_tool_spec():
     """Return Gemini function spec for web_search."""
-    return {
-        "name": "web_search", 
-        "description": "Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to look up on the web."
-                }
+    def web_search_func(query: str) -> str:
+        """Web search function for Gemini function calling."""
+        try:
+            from search_tool import web_search
+            return web_search(query)
+        except ImportError:
+            return f"Web search unavailable for query: {query}"
+    
+    return genai.protos.FunctionDeclaration(
+        name="web_search",
+        description="Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
+        parameters=genai.protos.Schema(
+            type=genai.protos.Type.OBJECT,
+            properties={
+                "query": genai.protos.Schema(
+                    type=genai.protos.Type.STRING,
+                    description="The search query to look up on the web."
+                )
             },
-            "required": ["query"]
-        }
-    }
+            required=["query"]
+        )
+    )
 
 
 # ---------------- LLM SCREENING -----------------
@@ -115,11 +123,12 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         "1. FIRST: Thoroughly analyze the document chunk for ALL relevant information - project locations, distances, measurements, environmental data, etc.\n"
         "2. Make reasonable inferences from the available information. If the document mentions a 'solar PV facility' and you're evaluating solar resource adequacy, that's strong evidence the site has adequate solar resources.\n"
         "3. Use web_search ONLY when critical information is completely missing and cannot be reasonably inferred from the document.\n"
-        "4. Be decisive: if you have evidence supporting a criterion (even indirectly), mark it as 'yes'. Only use 'unknown' when there's truly no information available.\n"
-        "5. For land costs on public lands, remember that BLM land typically has low/standardized costs and single entity ownership.\n"
+        "4. CRITICAL: For quantitative criteria (specific numbers, distances, prices), you MUST have actual data. Never assume numerical values even if you know they're 'typically' in a certain range.\n"
+        "5. For qualitative criteria (project types, general conditions), you can make reasonable inferences.\n"
+        "6. For AND/OR criteria, ALL parts must be satisfied. If any part is unknown, the whole criterion should be 'unknown' unless it's clearly met.\n"
         "\n"
         "VERDICT LOGIC:\n"
-        "- 'yes' = criterion is met based on evidence or reasonable inference\n"
+        "- 'yes' = criterion is met based on evidence or reasonable inference (for qualitative criteria) OR specific data (for quantitative criteria)\n"
         "- 'no' = criterion is clearly not met based on evidence\n"
         "- 'unknown' = absolutely no information available to make any determination\n"
         "\n"
@@ -148,44 +157,75 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     debug_messages.append(f"DEBUG: Chunk preview (first 500 chars): {repr(chunk[:500])}")
     debug_messages.append(f"DEBUG: Model: {model}, Temperature: {temperature}, Max rounds: {max_rounds}")
     
+    # Web search function for Gemini function calling
+    def web_search_func(query: str) -> str:
+        """Web search function for Gemini function calling."""
+        debug_messages.append(f"DEBUG: Web search called with query: {query}")
+        try:
+            from search_tool import web_search
+            results = web_search(query)
+            debug_messages.append(f"DEBUG: Search results length: {len(results)}")
+            return results
+        except ImportError as e:
+            debug_messages.append(f"DEBUG: Could not import web_search: {e}")
+            return f"Web search unavailable for query: {query}"
+    
+    # Configure generation with function calling
+    generation_config = {
+        "temperature": temperature,
+        "max_output_tokens": 4096,
+    }
+    
+    # Create model with tools
+    gemini_model = genai.GenerativeModel(
+        model_name=model,
+        generation_config=generation_config,
+        tools=[_web_search_tool_spec()]
+    )
+    
+    # Create chat session
+    chat = gemini_model.start_chat()
+    
     for round_num in range(max_rounds):
         debug_msg = f"DEBUG: Round {round_num + 1}/{max_rounds}"
         debug_messages.append(debug_msg)
         
         try:
-            # For now, simplify to basic Gemini call without tools
-            # Create model instance  
-            gemini_model = genai.GenerativeModel(
-                model_name=model,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": 4096,
-                }
-            )
-            
-            # Combine system and user prompts for Gemini
+            # Send prompt (combine system and user message for Gemini)
             full_prompt = f"{system_prompt}\n\n{user_prompt}"
-            response = gemini_model.generate_content(full_prompt)
+            response = chat.send_message(full_prompt)
             
-            # Create a mock msg object for compatibility
-            class MockMessage:
-                def __init__(self, content):
-                    self.content = content
+            debug_messages.append(f"DEBUG: Got response, text length: {len(response.text or '')}")
             
-            msg = MockMessage(response.text)
-            debug_messages.append(f"DEBUG: Got response, content length: {len(msg.content or '')}")
-            debug_messages.append(f"DEBUG: Has tool calls: {bool(getattr(msg, 'tool_calls', None))}")
-
-            # Skip web search for now - focus on getting basic screening working
-            # Web search functionality can be added back later
-
-            # Otherwise, try to parse the assistant content as JSON answer
-            if msg.content:
+            # Check if function calls were made
+            if response.parts:
+                for part in response.parts:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        debug_messages.append(f"DEBUG: Function call detected: {part.function_call.name}")
+                        
+                        # Execute the function call
+                        if part.function_call.name == "web_search":
+                            query = part.function_call.args.get("query", "")
+                            search_results = web_search_func(query)
+                            
+                            # Send function response back to model
+                            function_response = genai.protos.Part(
+                                function_response=genai.protos.FunctionResponse(
+                                    name="web_search",
+                                    response={"result": search_results}
+                                )
+                            )
+                            
+                            # Continue conversation with function result
+                            response = chat.send_message(function_response)
+            
+            # Try to parse the response as JSON
+            if response.text:
                 debug_messages.append(f"DEBUG: Attempting to parse JSON response")
-                debug_messages.append(f"DEBUG: Full response content: {repr(msg.content)}")
+                debug_messages.append(f"DEBUG: Full response content: {repr(response.text)}")
                 
                 # Try to clean up the response if it has markdown formatting
-                content = msg.content.strip()
+                content = response.text.strip()
                 if content.startswith("```json"):
                     content = content[7:]
                 if content.endswith("```"):
@@ -221,10 +261,9 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                     # fall through to retry
                     pass
             else:
-                debug_messages.append(f"DEBUG: No content in message")
+                debug_messages.append(f"DEBUG: No content in response")
 
-            # Append the assistant content and retry (may help the model)
-            messages.append({"role": "assistant", "content": msg.content or ""})
+            # Continue to next round if no valid JSON yet
             
         except Exception as e:
             debug_messages.append(f"DEBUG: API call error in round {round_num + 1}: {type(e).__name__}: {e}")
