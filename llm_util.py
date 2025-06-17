@@ -35,7 +35,7 @@ def get_env_var(key: str, default: str = None) -> str:
         return os.getenv(key, default)
 
 # Single model configuration
-MODEL = get_env_var("GEMINI_MODEL", "gemini-2.0-flash-exp")
+MODEL = get_env_var("GEMINI_MODEL", "gemini-2.5-flash-preview")
 
 # Configure Gemini
 genai.configure(api_key=get_env_var("GOOGLE_API_KEY"))
@@ -109,21 +109,23 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     """Internal helper that runs the full tool-calling loop with a given model."""
 
     system_prompt = (
-        "You are a project analyst. Analyze each criterion carefully.\n"
+        "You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.\n"
         "\n"
-        "WHEN YOU SEE QUANTITATIVE CRITERIA with specific thresholds (≤ $3,000/acre, ≥ 5km, etc):\n"
-        "- If document lacks those exact numbers, call web_search function immediately\n"
-        "- Distance without measurements = web_search for distance data\n"
+        "For each criterion, you must perform the following steps:\n"
+        "1.  **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.\n"
+        "2.  **Analyze Evidence:** Look at the evidence you found.\n"
+        "3.  **Make a Verdict:**\n"
+        "    -   If the evidence directly confirms the criterion, the verdict is 'yes'.\n"
+        "    -   If the evidence provides strong contextual clues that logically imply the criterion is met, the verdict is 'yes'. This requires you to connect different pieces of information to reach a conclusion.\n"
+        "    -   If the evidence contradicts the criterion, the verdict is 'no'.\n"
+        "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'. For criteria that require specific numbers (e.g., cost, distance, capacity), if you cannot find a specific number, the verdict MUST be 'unknown'.\n"
         "\n"
-        "VERDICT LOGIC:\n"
-        "- 'yes' = criterion clearly met\n"
-        "- 'no' = criterion clearly not met\n"
-        "- 'unknown' = insufficient info\n"
-        "\n"
-        "Quote what you find in the document first.\n"
-        "\n"
-        "JSON format:\n"
-        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"Found: [quote]. [verdict]\"},\n  ...\n}\n"
+        "**Output Format:**\n"
+        "Return ONLY a single JSON object. The keys must be the exact criterion strings.\n"
+        "{\n"
+        '  "criterion name": {"verdict": "yes|no|unknown", "reason": "Found: [Your quoted text here]. [Your brief explanation here]."},\n'
+        "  ...\n"
+        "}\n"
     )
 
     user_prompt = (
@@ -165,24 +167,12 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         "max_output_tokens": 4096,
     }
     
-    # Create model with tools
-    try:
-        tool_spec = _web_search_tool_spec()
-        debug_messages.append(f"DEBUG: Tool spec created successfully: {tool_spec.name}")
-        gemini_model = genai.GenerativeModel(
-            model_name=model,
-            generation_config=generation_config,
-            tools=[tool_spec]
-        )
-        debug_messages.append(f"DEBUG: Model created with tools successfully")
-    except Exception as e:
-        debug_messages.append(f"DEBUG: Error creating model with tools: {e}")
-        # Fallback to no tools
-        gemini_model = genai.GenerativeModel(
-            model_name=model,
-            generation_config=generation_config
-        )
-        debug_messages.append(f"DEBUG: Created model without tools as fallback")
+    # Create model WITHOUT tools for now to restore basic functionality
+    gemini_model = genai.GenerativeModel(
+        model_name=model,
+        generation_config=generation_config
+    )
+    debug_messages.append(f"DEBUG: Created model without tools (temporarily disabled)")
     
     # Create chat session
     chat = gemini_model.start_chat()
@@ -198,42 +188,8 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             
             debug_messages.append(f"DEBUG: Got response, text length: {len(response.text or '')}")
             
-            # Check if function calls were made
-            debug_messages.append(f"DEBUG: Response parts count: {len(response.parts) if response.parts else 0}")
-            if response.parts:
-                for i, part in enumerate(response.parts):
-                    debug_messages.append(f"DEBUG: Part {i} type: {type(part)}")
-                    debug_messages.append(f"DEBUG: Part {i}: has function_call attr = {hasattr(part, 'function_call')}")
-                    
-                    # Check if this part has a function call
-                    if hasattr(part, 'function_call') and part.function_call is not None:
-                        fc = part.function_call
-                        debug_messages.append(f"DEBUG: Function call detected: {fc.name}")
-                        debug_messages.append(f"DEBUG: Function call args: {dict(fc.args) if fc.args else {}}")
-                        
-                        # Execute the function call
-                        if fc.name == "web_search":
-                            query = fc.args.get("query", "") if fc.args else ""
-                            debug_messages.append(f"DEBUG: Executing web search with query: '{query}'")
-                            search_results = web_search_func(query)
-                            debug_messages.append(f"DEBUG: Search results preview: {search_results[:200]}...")
-                            
-                            # Send function response back to model
-                            function_response = genai.protos.Part(
-                                function_response=genai.protos.FunctionResponse(
-                                    name="web_search",
-                                    response={"result": search_results}
-                                )
-                            )
-                            
-                            # Continue conversation with function result
-                            debug_messages.append(f"DEBUG: Sending function response back to model")
-                            response = chat.send_message(function_response)
-                            debug_messages.append(f"DEBUG: Got follow-up response after function call")
-                    else:
-                        debug_messages.append(f"DEBUG: Part {i} has no function call (function_call = {getattr(part, 'function_call', 'MISSING')})")
-            else:
-                debug_messages.append(f"DEBUG: No response parts found")
+            # Function calling temporarily disabled - focus on getting basic analysis working
+            debug_messages.append(f"DEBUG: Function calling disabled - model should analyze document directly")
             
             # Try to parse the response as JSON
             if response.text:
