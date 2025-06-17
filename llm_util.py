@@ -124,11 +124,10 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         "    -   If the evidence contradicts the criterion, the verdict is 'no'.\\n"
         "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'.\\n"
         "\\n"
-        "**IMPORTANT - Use Web Search:** When you find evidence that partially meets a criterion but is missing specific quantitative data, you MUST call the web_search function to find the missing information. Examples:\\n"
-        "- If you find a facility name but not its capacity/size, search for: '[facility name] capacity' or '[facility name] specifications'\\n"
-        "- If you find a measurement in one unit but need another, search for: '[value] [unit1] to [unit2] conversion'\\n"
-        "- If you find a location but need specific data about it, search for: '[location] [specific data needed]'\\n"
-        "- If you find an entity but need missing quantitative details, search for: '[entity name] [missing detail]'\\n"
+        "**Web Search (when needed):** You have access to web search for gathering additional data. Use it strategically when:\\n"
+        "- You find strong evidence but need one specific missing piece of quantitative data\\n"
+        "- The document clearly implies something but lacks the exact numbers needed\\n"
+        "- You find entity/location names that could yield specific measurements\\n"
         "\\n"
         "**Search Strategy:** Use broad, simple queries that are likely to find data. Accept any numerical data from search results, even if approximate. For locations, try searching for the city/region name plus the data type (e.g., 'Las Vegas solar irradiance', 'Nevada transmission lines').\\n"
         "\\n"
@@ -184,9 +183,8 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         debug_messages.append(debug_msg)
         
         try:
-            # Send prompt (combine system and user message for Gemini)
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
-            response = chat.send_message(full_prompt)
+            # Send just the user prompt since system prompt is already set
+            response = chat.send_message(user_prompt)
             
             # Check if response has valid content
             response_text = ""
@@ -204,19 +202,19 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                         finish_str = str(finish_reason)
                     debug_messages.append(f"DEBUG: Finish reason: {finish_str}")
                 
-                # Try to get response text safely
-                try:
-                    response_text = response.text or ""
-                except (ValueError, AttributeError) as e:
-                    debug_messages.append(f"DEBUG: Could not access response.text: {e}")
-                    # Try to get text from parts directly
+                # Handle function calls in a loop (model might make multiple calls)
+                function_call_count = 0
+                max_function_calls = 5  # Prevent infinite loops
+                
+                while function_call_count < max_function_calls:
+                    has_function_call = False
+                    
                     if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
                         for part in candidate.content.parts:
-                            if hasattr(part, 'text') and part.text:
-                                response_text += part.text
-                            # Check for function calls in parts
-                            elif hasattr(part, 'function_call'):
-                                debug_messages.append("DEBUG: Found function_call in response parts")
+                            if hasattr(part, 'function_call'):
+                                has_function_call = True
+                                function_call_count += 1
+                                debug_messages.append(f"DEBUG: Found function_call #{function_call_count} in response parts")
                                 func_call = part.function_call
                                 if func_call.name == 'web_search':
                                     query = func_call.args.get('query', '')
@@ -233,14 +231,34 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                                     )
                                     new_response = chat.send_message(function_response)
                                     
-                                    # Process the new response
-                                    try:
-                                        response_text = new_response.text or ""
-                                        debug_messages.append(f"DEBUG: Got response after web search, text length: {len(response_text)}")
-                                    except (ValueError, AttributeError) as e:
-                                        debug_messages.append(f"DEBUG: Could not access response.text after web search: {e}")
-                                        response_text = ""
+                                    # Process the new response - update the response variable
+                                    response = new_response
+                                    if hasattr(new_response, 'candidates') and new_response.candidates:
+                                        candidate = new_response.candidates[0]
+                                        finish_reason = getattr(candidate, 'finish_reason', None)
+                                    
+                                    debug_messages.append(f"DEBUG: Updated response after web search #{function_call_count}")
                                     break  # Exit the parts loop after handling function call
+                    
+                    if not has_function_call:
+                        debug_messages.append(f"DEBUG: No more function calls found after {function_call_count} calls")
+                        break
+                
+                if function_call_count >= max_function_calls:
+                    debug_messages.append(f"DEBUG: Hit max function calls limit ({max_function_calls})")
+                
+                # Now try to get response text safely
+                try:
+                    response_text = response.text or ""
+                    debug_messages.append(f"DEBUG: Successfully got response.text, length: {len(response_text)}")
+                except (ValueError, AttributeError) as e:
+                    debug_messages.append(f"DEBUG: Could not access response.text: {e}")
+                    # Try to get text from parts directly
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                response_text += part.text
+                                debug_messages.append(f"DEBUG: Got text from part, length: {len(part.text)}")
             
             debug_messages.append(f"DEBUG: Got response, text length: {len(response_text)}")
             
@@ -255,36 +273,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                     debug_messages.append(f"DEBUG: Response blocked for safety reasons: {reason_str}")
                     return {"_debug": debug_messages}
                 elif reason_str == 'FUNCTION_CALL':
-                    debug_messages.append("DEBUG: Model invoked web_search function")
-                    # Handle function calling
-                    if hasattr(response, 'candidates') and response.candidates:
-                        candidate = response.candidates[0]
-                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                            for part in candidate.content.parts:
-                                if hasattr(part, 'function_call'):
-                                    func_call = part.function_call
-                                    if func_call.name == 'web_search':
-                                        query = func_call.args.get('query', '')
-                                        debug_messages.append(f"DEBUG: Executing web_search with query: {query}")
-                                        search_result = web_search_func(query)
-                                        debug_messages.append(f"DEBUG: Web search result length: {len(search_result)}")
-                                        
-                                        # Send search result back to model
-                                        function_response = genai.protos.Part(
-                                            function_response=genai.protos.FunctionResponse(
-                                                name='web_search',
-                                                response={'result': search_result}
-                                            )
-                                        )
-                                        response = chat.send_message(function_response)
-                                        
-                                        # Process the new response
-                                        try:
-                                            response_text = response.text or ""
-                                            debug_messages.append(f"DEBUG: Got response after web search, text length: {len(response_text)}")
-                                        except (ValueError, AttributeError) as e:
-                                            debug_messages.append(f"DEBUG: Could not access response.text after web search: {e}")
-                                            response_text = ""
+                    debug_messages.append("DEBUG: Function call handled above, continuing...")
                 else:
                     if not response_text:  # Only return error if we truly have no content
                         debug_messages.append(f"DEBUG: No content and finish reason: {reason_str}")
