@@ -67,7 +67,7 @@ def extract_text(path: str) -> str:
 
 
 # ---------- LLM CALLS ----------
-def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_mode: bool = False, model: Optional[str] = None):
+def chat_complete(prompt: str, temperature: float, max_tokens: int = 8192, json_mode: bool = False, model: Optional[str] = None):
     """Chat completion using Gemini API."""
     model_name = model or MODEL
     
@@ -154,9 +154,10 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         {"role": "user", "content": user_prompt},
     ]
 
-    # Configure generation parameters including temperature
+    # Configure generation parameters including temperature and max tokens
     generation_config = {
         "temperature": temperature,
+        "max_output_tokens": 8192,  # Increased from default to handle complex analysis
     }
     
     web_search_tool_spec = _web_search_tool_spec()
@@ -284,6 +285,10 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                 if reason_str in ['SAFETY', 'BLOCKED_REASON_SAFETY']:
                     debug_messages.append(f"DEBUG: Response blocked for safety reasons: {reason_str}")
                     return {"_debug": debug_messages}
+                elif reason_str in ['MAX_TOKENS', 'FINISH_REASON_MAX_TOKENS']:
+                    debug_messages.append(f"DEBUG: Hit max token limit - response was truncated: {reason_str}")
+                    debug_messages.append("DEBUG: Trying to continue with partial response or fallback")
+                    # Don't return immediately - try to get partial response
                 elif reason_str == 'FUNCTION_CALL':
                     debug_messages.append("DEBUG: Function call handled above, continuing...")
                 else:
@@ -296,40 +301,79 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                 debug_messages.append("DEBUG: Attempting to parse JSON response")
                 debug_messages.append(f"DEBUG: Full response content: {repr(response_text[:1000])}")
                 
+                # Try to find JSON in response (with or without markdown code blocks)
+                json_str = ""
                 json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(1)
+                else:
+                    # Try to find JSON without code blocks
+                    json_match = re.search(r'(\{.*?\})', response_text, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(1)
+                    else:
+                        json_str = response_text.strip()
+                
+                if json_str:
                     try:
                         result = json.loads(json_str)
                         debug_messages.append(f"DEBUG: JSON parsing successful, type: {type(result)}")
+                        
                         if isinstance(result, dict):
                             debug_messages.append(f"DEBUG: Successfully parsed JSON with {len(result)} items")
                             debug_messages.append(f"DEBUG: JSON keys: {list(result.keys())}")
                             
-                            # Check if any keys match our criteria
+                            # Check if this is a financial analysis response (has 'results' and 'ranking' keys)
+                            if 'results' in result and 'ranking' in result:
+                                debug_messages.append("DEBUG: Detected financial analysis format")
+                                # Convert financial format to standard format
+                                converted_result = {}
+                                if result['results'] and len(result['results']) > 0:
+                                    ticker_data = result['results'][0]  # Use first ticker's data
+                                    for key, value in ticker_data.items():
+                                        if key != 'ticker':
+                                            # Map financial fields to criteria
+                                            matching_criterion = None
+                                            for crit in criteria:
+                                                if key in crit.lower() or key.replace('_', '-') in crit.lower():
+                                                    matching_criterion = crit
+                                                    break
+                                            
+                                            if matching_criterion:
+                                                if isinstance(value, (int, float)):
+                                                    converted_result[matching_criterion] = {
+                                                        "verdict": "calculated", 
+                                                        "reason": f"Calculated value: {value}"
+                                                    }
+                                                elif value in ['yes', 'no', 'unknown']:
+                                                    converted_result[matching_criterion] = {
+                                                        "verdict": value, 
+                                                        "reason": f"Analysis result: {value}"
+                                                    }
+                                                else:
+                                                    converted_result[matching_criterion] = {
+                                                        "verdict": str(value), 
+                                                        "reason": f"Value: {value}"
+                                                    }
+                                
+                                # Add the original financial data for reference
+                                converted_result['_financial_data'] = result
+                                result = converted_result
+                                debug_messages.append(f"DEBUG: Converted to standard format with {len(result)} criteria")
+                            
+                            # Check if any keys match our criteria (standard format)
                             matching_criteria = [crit for crit in criteria if crit in result]
                             debug_messages.append(f"DEBUG: Matching criteria found: {len(matching_criteria)}")
                             
-                            # Check for quantitative criteria that are unknown (might need web search)
-                            quantitative_keywords = ['≥', '≤', '$', 'km', 'MW', 'kWh', '%', 'months']
-                            unknown_quantitative = []
-                            for crit, verdict_data in result.items():
-                                if isinstance(verdict_data, dict) and verdict_data.get('verdict', '').lower() == 'unknown':
-                                    if any(keyword in crit for keyword in quantitative_keywords):
-                                        unknown_quantitative.append(crit)
-                            
-                            if unknown_quantitative:
-                                debug_messages.append(f"DEBUG: Found {len(unknown_quantitative)} unknown quantitative criteria that could benefit from web search:")
-                                for crit in unknown_quantitative[:3]:  # Show first 3
-                                    debug_messages.append(f"DEBUG:   - {crit[:80]}...")
-                            
                             # Store debug info for potential display
                             result['_debug'] = debug_messages
+                            
                             # Ensure every criterion is present; if missing, mark unknown
                             for crit in criteria:
                                 if crit not in result:
                                     debug_messages.append(f"DEBUG: Missing criterion '{crit}', adding as unknown")
                                     result[crit] = {"verdict": "unknown", "reason": "Not mentioned"}
+                            
                             return result
                         else:
                             debug_messages.append(f"DEBUG: JSON result is not a dict: {type(result)}")

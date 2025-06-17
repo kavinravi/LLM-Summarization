@@ -321,15 +321,15 @@ def main():
 def document_screening_page():
     st.header("Document Screening")
     
-    # File upload
+    # File uploader
     uploaded_files = st.file_uploader(
-        "Upload documents to screen",
-        type=['pdf', 'docx', 'doc', 'xlsx', 'xls', 'csv'],
+        "Choose files to screen",
+        type=['pdf', 'docx', 'xlsx', 'csv'],
         accept_multiple_files=True,
-        help="Supported formats: PDF, DOCX, DOC, XLSX, XLS, CSV"
+        help="Upload documents (PDF, Word, Excel, CSV) for screening"
     )
     
-    # Criteria selection
+    # Criteria section
     st.subheader("📋 Screening Criteria")
     st.markdown("---")  # Visual separator
     
@@ -344,17 +344,32 @@ def document_screening_page():
         for i, criterion in enumerate(default_criteria, 1):
             formatted_criteria.append(f"{i}. {criterion}")
         
-        # Use auto-formatted content if available, otherwise use default
-        display_value = st.session_state.get('auto_format_criteria', "\n\n".join(formatted_criteria))
+        # Initialize criteria text in session state if not exists
+        if 'criteria_text_state' not in st.session_state:
+            st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria)
+        
+        # Use auto-formatted content if available, or custom loaded content, otherwise use stored state
+        if 'auto_format_criteria' in st.session_state:
+            display_value = st.session_state['auto_format_criteria']
+        elif 'load_custom_criteria' in st.session_state:
+            display_value = st.session_state['load_custom_criteria']
+            # Clear the flag after using it
+            del st.session_state['load_custom_criteria']
+        else:
+            display_value = st.session_state['criteria_text_state']
         
         # Allow users to modify criteria with auto-numbering
         criteria_text = st.text_area(
             "Edit criteria (one per line):",
-            value=display_value,  # Use either auto-formatted or default
+            value=display_value,  # Use either auto-formatted, custom loaded, or stored state
             height=400,  # Increased height to accommodate better formatting
             help="Each line represents one screening criterion. Add new criteria on new lines, then click 'Auto-Number' to format!",
             key="criteria_text_area"
         )
+        
+        # Update the stored state when user changes criteria (but not if we just loaded custom criteria)
+        if 'load_custom_criteria' not in st.session_state:
+            st.session_state['criteria_text_state'] = criteria_text
         
         # Clear the auto-format state after using it
         if 'auto_format_criteria' in st.session_state:
@@ -395,10 +410,20 @@ def document_screening_page():
                     formatted_criteria_new.append(f"{i}. {criterion}")
                 # Update session state to trigger re-render
                 st.session_state['auto_format_criteria'] = "\n\n".join(formatted_criteria_new)
+                st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria_new)
                 st.success("✨ Criteria auto-numbered!")
                 st.rerun()
         
         if st.button("📄 Load Default"):
+            # Reset to default criteria
+            default_criteria = load_default_criteria()
+            formatted_criteria = []
+            for i, criterion in enumerate(default_criteria, 1):
+                formatted_criteria.append(f"{i}. {criterion}")
+            # Use the special flag to force text area update
+            st.session_state['load_custom_criteria'] = "\n\n".join(formatted_criteria)
+            st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria)
+            st.success("Default criteria loaded!")
             st.rerun()
         
         if st.button("💾 Save Custom"):
@@ -413,22 +438,21 @@ def document_screening_page():
             try:
                 with open("cache/criteria_cache/custom_criteria.json", "r", encoding="utf-8") as f:
                     custom_criteria = json.load(f)
-                st.session_state['custom_criteria'] = custom_criteria
+                # Format the loaded criteria with numbers
+                formatted_custom = []
+                for i, criterion in enumerate(custom_criteria, 1):
+                    formatted_custom.append(f"{i}. {criterion}")
+                # Use the special flag to force text area update
+                st.session_state['load_custom_criteria'] = "\n\n".join(formatted_custom)
+                st.session_state['criteria_text_state'] = "\n\n".join(formatted_custom)
                 st.success("Custom criteria loaded from cache/criteria_cache/!")
                 st.rerun()
             except FileNotFoundError:
                 st.error("No custom criteria file found in cache/criteria_cache/!")
-    
-    # Check if custom criteria should be loaded
-    if 'custom_criteria' in st.session_state:
-        criteria_text = st.text_area(
-            "Edit criteria (one per line):",
-            value="\n".join(st.session_state['custom_criteria']),
-            height=300,
-            key="custom_criteria_area"
-        )
-        criteria = [line.strip() for line in criteria_text.split('\n') if line.strip()]
-        del st.session_state['custom_criteria']
+            except json.JSONDecodeError:
+                st.error("Error reading custom criteria file - invalid JSON format!")
+            except Exception as e:
+                st.error(f"Error loading custom criteria: {str(e)}")
     
     # Display number of criteria and preview
     st.info(f"📋 {len(criteria)} criteria loaded")
@@ -475,14 +499,23 @@ Return ONLY JSON in this format:
         if show_default:
             st.code(default_prompt, language="text")
         
-        # Custom system prompt input - force refresh
-        use_custom_prompt = st.checkbox("Use custom system prompt (uncheck to use default prompt)", key="use_custom_prompt")
+        # Initialize system prompt state variables if they don't exist
+        if 'use_custom_prompt' not in st.session_state:
+            st.session_state['use_custom_prompt'] = False
+        if 'prompt_text' not in st.session_state:
+            st.session_state['prompt_text'] = default_prompt
+        
+        # Custom system prompt checkbox - use session state to maintain state
+        use_custom_prompt = st.checkbox(
+            "Use custom system prompt (uncheck to use default prompt)", 
+            value=st.session_state['use_custom_prompt'],
+            key="use_custom_prompt_checkbox"
+        )
+        
+        # Update session state when checkbox changes
+        st.session_state['use_custom_prompt'] = use_custom_prompt
         
         if use_custom_prompt:
-            # Initialize prompt text if not exists
-            if 'prompt_text' not in st.session_state:
-                st.session_state['prompt_text'] = default_prompt
-            
             prompt_col1, prompt_col2 = st.columns([4, 1])
             
             with prompt_col1:
@@ -502,9 +535,14 @@ Return ONLY JSON in this format:
                 if st.button("🔄 Reset to Default", help="Reset the system prompt to the default template"):
                     st.session_state['prompt_text'] = default_prompt
                     st.rerun()
+            
+            # Show current custom prompt status
+            st.info("✅ Using custom system prompt")
         else:
+            # When unchecked, still preserve the custom prompt text but don't use it
             if 'custom_system_prompt' in st.session_state:
                 del st.session_state['custom_system_prompt']
+            st.info("ℹ️ Using default system prompt")
         
         # Example templates
         st.markdown("---")
