@@ -79,4 +79,5 @@ verdict.json
 *.docx
 *.xlsx
 temp_files/
-output/ 
+output/
+screening_cache/ 

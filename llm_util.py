@@ -111,19 +111,19 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     system_prompt = (
         "You are a project analyst. Analyze each criterion carefully.\n"
         "\n"
-        "FOR QUANTITATIVE CRITERIA (prices, costs, distances):\n"
-        "- If document lacks specific numbers, you MUST call web_search function\n"
-        "- Example: Missing land costs → web_search(\"BLM land lease costs per acre\")\n"
+        "WHEN YOU SEE QUANTITATIVE CRITERIA with specific thresholds (≤ $3,000/acre, ≥ 5km, etc):\n"
+        "- If document lacks those exact numbers, call web_search function immediately\n"
+        "- Distance without measurements = web_search for distance data\n"
         "\n"
         "VERDICT LOGIC:\n"
-        "- 'yes' = criterion clearly met based on evidence\n"
+        "- 'yes' = criterion clearly met\n"
         "- 'no' = criterion clearly not met\n"
-        "- 'unknown' = insufficient information to determine\n"
+        "- 'unknown' = insufficient info\n"
         "\n"
-        "ALWAYS quote what you find in the document first.\n"
+        "Quote what you find in the document first.\n"
         "\n"
-        "Return ONLY JSON:\n"
-        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"Found: [quote]. [verdict explanation]\"},\n  ...\n}\n"
+        "JSON format:\n"
+        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"Found: [quote]. [verdict]\"},\n  ...\n}\n"
     )
 
     user_prompt = (
@@ -202,15 +202,19 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             debug_messages.append(f"DEBUG: Response parts count: {len(response.parts) if response.parts else 0}")
             if response.parts:
                 for i, part in enumerate(response.parts):
-                    debug_messages.append(f"DEBUG: Part {i}: has function_call = {hasattr(part, 'function_call')}")
-                    if hasattr(part, 'function_call') and part.function_call:
-                        debug_messages.append(f"DEBUG: Function call detected: {part.function_call.name}")
-                        debug_messages.append(f"DEBUG: Function call args: {part.function_call.args}")
+                    debug_messages.append(f"DEBUG: Part {i} type: {type(part)}")
+                    debug_messages.append(f"DEBUG: Part {i}: has function_call attr = {hasattr(part, 'function_call')}")
+                    
+                    # Check if this part has a function call
+                    if hasattr(part, 'function_call') and part.function_call is not None:
+                        fc = part.function_call
+                        debug_messages.append(f"DEBUG: Function call detected: {fc.name}")
+                        debug_messages.append(f"DEBUG: Function call args: {dict(fc.args) if fc.args else {}}")
                         
                         # Execute the function call
-                        if part.function_call.name == "web_search":
-                            query = part.function_call.args.get("query", "")
-                            debug_messages.append(f"DEBUG: Executing web search with query: {query}")
+                        if fc.name == "web_search":
+                            query = fc.args.get("query", "") if fc.args else ""
+                            debug_messages.append(f"DEBUG: Executing web search with query: '{query}'")
                             search_results = web_search_func(query)
                             debug_messages.append(f"DEBUG: Search results preview: {search_results[:200]}...")
                             
@@ -227,7 +231,7 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                             response = chat.send_message(function_response)
                             debug_messages.append(f"DEBUG: Got follow-up response after function call")
                     else:
-                        debug_messages.append(f"DEBUG: Part {i} has no function call")
+                        debug_messages.append(f"DEBUG: Part {i} has no function call (function_call = {getattr(part, 'function_call', 'MISSING')})")
             else:
                 debug_messages.append(f"DEBUG: No response parts found")
             
