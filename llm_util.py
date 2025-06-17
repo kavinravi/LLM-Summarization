@@ -87,14 +87,6 @@ def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_
 
 def _web_search_tool_spec():
     """Return Gemini function spec for web_search."""
-    def web_search_func(query: str) -> str:
-        """Web search function for Gemini function calling."""
-        try:
-            from search_tool import web_search
-            return web_search(query)
-        except ImportError:
-            return f"Web search unavailable for query: {query}"
-    
     return genai.protos.FunctionDeclaration(
         name="web_search",
         description="Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
@@ -117,24 +109,15 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     """Internal helper that runs the full tool-calling loop with a given model."""
 
     system_prompt = (
-        "You are a project-diligence analyst.\n"
-        "You will be given a document chunk and a list of renewable-energy siting criteria.\n"
-        "CRITICAL INSTRUCTIONS:\n"
-        "1. FIRST: Thoroughly analyze the document chunk for ALL relevant information - project locations, distances, measurements, environmental data, etc.\n"
-        "2. Make reasonable inferences from the available information. If the document mentions a 'solar PV facility' and you're evaluating solar resource adequacy, that's strong evidence the site has adequate solar resources.\n"
-        "3. Use web_search ONLY when critical information is completely missing and cannot be reasonably inferred from the document.\n"
-        "4. CRITICAL: For quantitative criteria (specific numbers, distances, prices), you MUST have actual data. Never assume numerical values even if you know they're 'typically' in a certain range.\n"
-        "5. For qualitative criteria (project types, general conditions), you can make reasonable inferences.\n"
-        "6. For AND/OR criteria, ALL parts must be satisfied. If any part is unknown, the whole criterion should be 'unknown' unless it's clearly met.\n"
+        "You are a project analyst. For each criterion, thoroughly search the document text first.\n"
         "\n"
-        "VERDICT LOGIC:\n"
-        "- 'yes' = criterion is met based on evidence or reasonable inference (for qualitative criteria) OR specific data (for quantitative criteria)\n"
-        "- 'no' = criterion is clearly not met based on evidence\n"
-        "- 'unknown' = absolutely no information available to make any determination\n"
+        "PROCESS:\n"
+        "1. Quote relevant text you find in the document\n"
+        "2. For missing quantitative data (prices, costs), call web_search function\n"
+        "3. Make your verdict\n"
         "\n"
-        "Return ONLY JSON with this exact structure (no markdown, no extra text):\n"
-        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"short explanation\"},\n  ...one object per criterion...\n}\n"
-        "Every criterion listed below MUST appear once in the JSON, and the JSON **key must be copied verbatim from the list** (no re-phrasing or truncation).\n"
+        "Return ONLY JSON:\n"
+        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"Document mentions: [quote] + verdict explanation\"},\n  ...\n}\n"
     )
 
     user_prompt = (
@@ -177,11 +160,23 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     }
     
     # Create model with tools
-    gemini_model = genai.GenerativeModel(
-        model_name=model,
-        generation_config=generation_config,
-        tools=[_web_search_tool_spec()]
-    )
+    try:
+        tool_spec = _web_search_tool_spec()
+        debug_messages.append(f"DEBUG: Tool spec created successfully: {tool_spec.name}")
+        gemini_model = genai.GenerativeModel(
+            model_name=model,
+            generation_config=generation_config,
+            tools=[tool_spec]
+        )
+        debug_messages.append(f"DEBUG: Model created with tools successfully")
+    except Exception as e:
+        debug_messages.append(f"DEBUG: Error creating model with tools: {e}")
+        # Fallback to no tools
+        gemini_model = genai.GenerativeModel(
+            model_name=model,
+            generation_config=generation_config
+        )
+        debug_messages.append(f"DEBUG: Created model without tools as fallback")
     
     # Create chat session
     chat = gemini_model.start_chat()
