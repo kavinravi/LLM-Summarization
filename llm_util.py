@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os, json, textwrap, argparse
 import pdfplumber, docx, pandas as pd
-from openai import OpenAI
+import google.generativeai as genai
 from dotenv import load_dotenv
 # Import web_search locally when needed to avoid import issues
 from typing import Optional  # For Python <3.10 union
@@ -35,16 +35,14 @@ def get_env_var(key: str, default: str = None) -> str:
         return os.getenv(key, default)
 
 # Single model configuration
-MODEL = get_env_var("OPENAI_MODEL", "gpt-4o")
+MODEL = get_env_var("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
-client = OpenAI(
-    api_key=get_env_var("OPENAI_API_KEY"),
-    base_url=get_env_var("OPENAI_BASE_URL")
-)
+# Configure Gemini
+genai.configure(api_key=get_env_var("GOOGLE_API_KEY"))
 
-MAX_INPUT_TOKENS = 128000
-# 20 000 chars ≈ 15k tokens – much larger chunks possible with GPT-4o's 128k window
-CHUNK_SIZE_CHARS = 20000
+MAX_INPUT_TOKENS = 2000000  # Gemini 2.0 Flash has 2M token context window
+# 150,000 chars ≈ 100k tokens – much larger chunks possible with Gemini's 2M window
+CHUNK_SIZE_CHARS = 150000
 
 
 # ---------- FILE I/O ----------
@@ -63,40 +61,46 @@ def extract_text(path: str) -> str:
 
 # ---------- LLM CALLS ----------
 def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_mode: bool = False, model: Optional[str] = None):
-    params = {
-        "model": model or MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if json_mode:
-        params["response_format"] = {"type": "json_object"}
+    """Chat completion using Gemini API."""
+    model_name = model or MODEL
     
-    resp = client.chat.completions.create(**params)
-    return resp.choices[0].message.content.strip()
+    # Configure generation parameters
+    generation_config = {
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+    }
+    
+    # Add JSON mode if requested
+    if json_mode:
+        generation_config["response_mime_type"] = "application/json"
+    
+    # Create model instance
+    gemini_model = genai.GenerativeModel(
+        model_name=model_name,
+        generation_config=generation_config
+    )
+    
+    # Generate response
+    response = gemini_model.generate_content(prompt)
+    return response.text.strip()
 
 
 def _web_search_tool_spec():
-    """Return OpenAI tools spec for web_search."""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query to look up on the web."
-                        }
-                    },
-                    "required": ["query"]
-                },
-            }
+    """Return Gemini function spec for web_search."""
+    return {
+        "name": "web_search", 
+        "description": "Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to look up on the web."
+                }
+            },
+            "required": ["query"]
         }
-    ]
+    }
 
 
 # ---------------- LLM SCREENING -----------------
@@ -143,16 +147,26 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         debug_messages.append(debug_msg)
         
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                temperature=temperature,
-                max_tokens=4096,
+            # For now, simplify to basic Gemini call without tools
+            # Create model instance  
+            gemini_model = genai.GenerativeModel(
+                model_name=model,
+                generation_config={
+                    "temperature": temperature,
+                    "max_output_tokens": 4096,
+                }
             )
-
-            msg = response.choices[0].message
+            
+            # Combine system and user prompts for Gemini
+            full_prompt = f"{system_prompt}\n\n{user_prompt}"
+            response = gemini_model.generate_content(full_prompt)
+            
+            # Create a mock msg object for compatibility
+            class MockMessage:
+                def __init__(self, content):
+                    self.content = content
+            
+            msg = MockMessage(response.text)
             debug_messages.append(f"DEBUG: Got response, content length: {len(msg.content or '')}")
             debug_messages.append(f"DEBUG: Has tool calls: {bool(getattr(msg, 'tool_calls', None))}")
 
@@ -291,17 +305,23 @@ def llm_screen_no_web(chunk: str, criteria: list[str], temperature: float = 0.0)
     ]
 
     try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=4096,
+        # Use Gemini instead
+        gemini_model = genai.GenerativeModel(
+            model_name=MODEL,
+            generation_config={
+                "temperature": temperature,
+                "max_output_tokens": 4096,
+                "response_mime_type": "application/json"
+            }
         )
-
-        msg = response.choices[0].message
-        if msg.content:
+        
+        # Combine prompts for Gemini
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        response = gemini_model.generate_content(full_prompt)
+        
+        if response.text:
             # Try to clean up the response if it has markdown formatting
-            content = msg.content.strip()
+            content = response.text.strip()
             if content.startswith("```json"):
                 content = content[7:]
             if content.endswith("```"):
