@@ -32,7 +32,7 @@ st.set_page_config(
 CHUNK_SIZE_CHARS = 150000  # Gemini 2.5 flash supports much larger context
 
 # Cache directory for persistent storage
-CACHE_DIR = "screening_cache"
+CACHE_DIR = "cache/screening_cache"
 
 def ensure_cache_dir():
     """Create cache directory if it doesn't exist."""
@@ -400,19 +400,22 @@ def document_screening_page():
             st.rerun()
         
         if st.button("💾 Save Custom"):
-            with open("custom_criteria.json", "w", encoding="utf-8") as f:
+            # Ensure the cache directory structure exists
+            os.makedirs("cache/criteria_cache", exist_ok=True)
+            
+            with open("cache/criteria_cache/custom_criteria.json", "w", encoding="utf-8") as f:
                 json.dump(criteria, f, indent=2)
-            st.success("Custom criteria saved!")
+            st.success("Custom criteria saved to cache/criteria_cache/!")
         
         if st.button("📂 Load Custom"):
             try:
-                with open("custom_criteria.json", "r", encoding="utf-8") as f:
+                with open("cache/criteria_cache/custom_criteria.json", "r", encoding="utf-8") as f:
                     custom_criteria = json.load(f)
                 st.session_state['custom_criteria'] = custom_criteria
-                st.success("Custom criteria loaded!")
+                st.success("Custom criteria loaded from cache/criteria_cache/!")
                 st.rerun()
             except FileNotFoundError:
-                st.error("No custom criteria file found!")
+                st.error("No custom criteria file found in cache/criteria_cache/!")
     
     # Check if custom criteria should be loaded
     if 'custom_criteria' in st.session_state:

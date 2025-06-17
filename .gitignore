@@ -80,4 +80,6 @@ verdict.json
 *.xlsx
 temp_files/
 output/
-screening_cache/ 
+
+# Cache directories
+cache/ 
