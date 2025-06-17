@@ -109,15 +109,21 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     """Internal helper that runs the full tool-calling loop with a given model."""
 
     system_prompt = (
-        "You are a project analyst. For each criterion, thoroughly search the document text first.\n"
+        "You are a project analyst. Analyze each criterion carefully.\n"
         "\n"
-        "PROCESS:\n"
-        "1. Quote relevant text you find in the document\n"
-        "2. For missing quantitative data (prices, costs), call web_search function\n"
-        "3. Make your verdict\n"
+        "FOR QUANTITATIVE CRITERIA (prices, costs, distances):\n"
+        "- If document lacks specific numbers, you MUST call web_search function\n"
+        "- Example: Missing land costs → web_search(\"BLM land lease costs per acre\")\n"
+        "\n"
+        "VERDICT LOGIC:\n"
+        "- 'yes' = criterion clearly met based on evidence\n"
+        "- 'no' = criterion clearly not met\n"
+        "- 'unknown' = insufficient information to determine\n"
+        "\n"
+        "ALWAYS quote what you find in the document first.\n"
         "\n"
         "Return ONLY JSON:\n"
-        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"Document mentions: [quote] + verdict explanation\"},\n  ...\n}\n"
+        "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"Found: [quote]. [verdict explanation]\"},\n  ...\n}\n"
     )
 
     user_prompt = (
@@ -193,15 +199,20 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             debug_messages.append(f"DEBUG: Got response, text length: {len(response.text or '')}")
             
             # Check if function calls were made
+            debug_messages.append(f"DEBUG: Response parts count: {len(response.parts) if response.parts else 0}")
             if response.parts:
-                for part in response.parts:
+                for i, part in enumerate(response.parts):
+                    debug_messages.append(f"DEBUG: Part {i}: has function_call = {hasattr(part, 'function_call')}")
                     if hasattr(part, 'function_call') and part.function_call:
                         debug_messages.append(f"DEBUG: Function call detected: {part.function_call.name}")
+                        debug_messages.append(f"DEBUG: Function call args: {part.function_call.args}")
                         
                         # Execute the function call
                         if part.function_call.name == "web_search":
                             query = part.function_call.args.get("query", "")
+                            debug_messages.append(f"DEBUG: Executing web search with query: {query}")
                             search_results = web_search_func(query)
+                            debug_messages.append(f"DEBUG: Search results preview: {search_results[:200]}...")
                             
                             # Send function response back to model
                             function_response = genai.protos.Part(
@@ -212,7 +223,13 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                             )
                             
                             # Continue conversation with function result
+                            debug_messages.append(f"DEBUG: Sending function response back to model")
                             response = chat.send_message(function_response)
+                            debug_messages.append(f"DEBUG: Got follow-up response after function call")
+                    else:
+                        debug_messages.append(f"DEBUG: Part {i} has no function call")
+            else:
+                debug_messages.append(f"DEBUG: No response parts found")
             
             # Try to parse the response as JSON
             if response.text:
