@@ -147,12 +147,17 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         {"role": "user", "content": user_prompt},
     ]
 
-    # Temporarily disable web search tool to debug safety issues
+    # Configure generation parameters including temperature
+    generation_config = {
+        "temperature": temperature,
+    }
+    
     web_search_tool_spec = _web_search_tool_spec()
     gemini_model = genai.GenerativeModel(
         model_name=model,
         tools=[web_search_tool_spec],
-        system_instruction=system_prompt
+        system_instruction=system_prompt,
+        generation_config=generation_config
     )
     debug_messages = []
     debug_messages.append(f"DEBUG: Starting screening with {len(criteria)} criteria")
@@ -359,15 +364,59 @@ def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_ro
 
 
 def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
-    prompt = (
-        "You are a copywriter for a renewable-energy SaaS startup.\n"
+    """Generate marketing blurb using Gemini with proper response handling."""
+    
+    system_prompt = (
+        "You are a copywriter for a renewable-energy SaaS startup. "
+        "Write concise, optimistic marketing copy that highlights project strengths."
+    )
+    
+    user_prompt = (
         "Write a concise (≤ 120 words) marketing blurb that:\n"
         "• Highlights the top PASS items from the screening result.\n"
         "• Soft-pedals any FAIL items as future mitigation steps.\n"
         "• Uses an optimistic, professional tone.\n\n"
         f"Screening result:\n{json.dumps(verdict_json, indent=2)}"
     )
-    return chat_complete(prompt, temperature, max_tokens=256)
+    
+    # Configure generation parameters
+    generation_config = {
+        "temperature": temperature,
+        "max_output_tokens": 256,
+    }
+    
+    # Create model instance without tools (no web search needed for marketing copy)
+    gemini_model = genai.GenerativeModel(
+        model_name=MODEL,
+        generation_config=generation_config,
+        system_instruction=system_prompt
+    )
+    
+    try:
+        # Generate response
+        response = gemini_model.generate_content(user_prompt)
+        
+        # Try to get response text safely
+        response_text = ""
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            
+            try:
+                response_text = response.text or ""
+            except (ValueError, AttributeError) as e:
+                # Try to get text from parts directly
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            response_text += part.text
+        
+        if response_text:
+            return response_text.strip()
+        else:
+            return "Unable to generate marketing blurb - please try again."
+            
+    except Exception as e:
+        return f"Error generating blurb: {str(e)}"
 
 
 # ---------- CLI ----------
