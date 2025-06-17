@@ -113,11 +113,17 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         "You will be given a document chunk and a list of renewable-energy siting criteria.\n"
         "CRITICAL INSTRUCTIONS:\n"
         "1. FIRST: Thoroughly analyze the document chunk for ALL relevant information - project locations, distances, measurements, environmental data, etc.\n"
-        "2. Look for indirect clues and inferences you can make from the document content.\n"
-        "3. ONLY use web_search as a last resort if absolutely critical information is completely missing from the document.\n"
-        "4. The document is an Environmental Assessment and likely contains most technical details needed for evaluation.\n"
-        "5. If you can make a reasonable determination from the document content, do NOT search the web.\n"
-        "When you have enough info, return ONLY JSON with this exact structure (no markdown, no extra text):\n"
+        "2. Make reasonable inferences from the available information. If the document mentions a 'solar PV facility' and you're evaluating solar resource adequacy, that's strong evidence the site has adequate solar resources.\n"
+        "3. Use web_search ONLY when critical information is completely missing and cannot be reasonably inferred from the document.\n"
+        "4. Be decisive: if you have evidence supporting a criterion (even indirectly), mark it as 'yes'. Only use 'unknown' when there's truly no information available.\n"
+        "5. For land costs on public lands, remember that BLM land typically has low/standardized costs and single entity ownership.\n"
+        "\n"
+        "VERDICT LOGIC:\n"
+        "- 'yes' = criterion is met based on evidence or reasonable inference\n"
+        "- 'no' = criterion is clearly not met based on evidence\n"
+        "- 'unknown' = absolutely no information available to make any determination\n"
+        "\n"
+        "Return ONLY JSON with this exact structure (no markdown, no extra text):\n"
         "{\n  \"criterion name\": {\"verdict\": \"yes|no|unknown\", \"reason\": \"short explanation\"},\n  ...one object per criterion...\n}\n"
         "Every criterion listed below MUST appear once in the JSON, and the JSON **key must be copied verbatim from the list** (no re-phrasing or truncation).\n"
     )
@@ -170,41 +176,8 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             debug_messages.append(f"DEBUG: Got response, content length: {len(msg.content or '')}")
             debug_messages.append(f"DEBUG: Has tool calls: {bool(getattr(msg, 'tool_calls', None))}")
 
-            # If the model wants to call the web_search tool
-            if getattr(msg, "tool_calls", None):
-                debug_messages.append(f"DEBUG: Processing {len(msg.tool_calls)} tool calls")
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content,
-                    "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
-                })
-
-                for tc in msg.tool_calls:
-                    try:
-                        arguments = json.loads(tc.function.arguments)
-                        query = arguments["query"]
-                        debug_messages.append(f"DEBUG: Web search query: {query}")
-                    except Exception as e:
-                        debug_messages.append(f"DEBUG: Error parsing arguments: {e}")
-                        query = tc.function.arguments if isinstance(tc.function.arguments, str) else str(tc.function.arguments)
-
-                    # Import web_search locally to avoid import issues
-                    try:
-                        from search_tool import web_search
-                        results_text = web_search(query)
-                    except ImportError as e:
-                        debug_messages.append(f"DEBUG: Could not import web_search: {e}")
-                        results_text = f"Web search unavailable for query: {query}"
-                    
-                    debug_messages.append(f"DEBUG: Search results length: {len(results_text)}")
-                    debug_messages.append(f"DEBUG: Search results preview: {repr(results_text[:200])}")
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": results_text,
-                    })
-                # go to next round
-                continue
+            # Skip web search for now - focus on getting basic screening working
+            # Web search functionality can be added back later
 
             # Otherwise, try to parse the assistant content as JSON answer
             if msg.content:
