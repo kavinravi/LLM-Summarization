@@ -22,8 +22,8 @@ import textwrap
 
 # Page configuration
 st.set_page_config(
-    page_title="Renewable Energy Project Screener",
-    page_icon="🌱",
+    page_title="Project Document Screener",
+    page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -291,8 +291,8 @@ def consolidate_chunk_results(verdicts, criteria):
 # Main app
 def main():
     # Header
-    st.title("🌱 Renewable Energy Project Document Screener")
-    st.markdown("Upload documents and screen them against renewable energy project criteria using AI analysis.")
+    st.title("Project Document Screener")
+    st.markdown("Upload documents and screen them against custom criteria using AI analysis.")
     
     # Load cached results on startup
     if 'cached_sessions' not in st.session_state:
