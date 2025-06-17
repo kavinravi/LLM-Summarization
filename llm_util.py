@@ -60,6 +60,9 @@ def extract_text(path: str) -> str:
     if ext in (".xlsx", ".xls"):
         dfs = pd.read_excel(path, sheet_name=None)
         return "\n".join(df.to_csv(index=False) for df in dfs.values())
+    if ext == ".csv":
+        df = pd.read_csv(path)
+        return df.to_csv(index=False)
     raise ValueError(f"Unsupported file type: {ext}")
 
 
@@ -109,33 +112,37 @@ def _web_search_tool_spec():
 
 # ---------------- LLM SCREENING -----------------
 
-def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature: float, max_rounds: int) -> dict:
+def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature: float, max_rounds: int, custom_system_prompt: str = None) -> dict:
     """Internal helper that runs the full tool-calling loop with a given model."""
 
-    system_prompt = (
-        "You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.\\n"
-        "\\n"
-        "For each criterion, you must perform the following steps:\\n"
-        "1.  **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.\\n"
-        "2.  **Analyze Evidence:** Look at the evidence you found.\\n"
-        "3.  **Make a Verdict:**\\n"
-        "    -   If the evidence directly confirms the criterion, the verdict is 'yes'.\\n"
-        "    -   If the evidence provides strong contextual clues that logically imply the criterion is met, the verdict is 'yes'. This requires you to connect different pieces of information to reach a conclusion.\\n"
-        "    -   If the evidence contradicts the criterion, the verdict is 'no'.\\n"
-        "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'.\\n"
-        "\\n"
-        "**Web Search (when needed):** You have access to web search for gathering additional data. Use it strategically when:\\n"
-        "- You find strong evidence but need one specific missing piece of quantitative data\\n"
-        "- The document clearly implies something but lacks the exact numbers needed\\n"
-        "- You find entity/location names that could yield specific measurements\\n"
-        "\\n"
-        "**Search Strategy:** Use broad, simple queries that are likely to find data. Accept any numerical data from search results, even if approximate. For locations, try searching for the city/region name plus the data type (e.g., 'Las Vegas solar irradiance', 'Nevada transmission lines').\\n"
-        "\\n"
-        "Do NOT return 'unknown' for quantitative criteria without first attempting web search. If search returns any relevant numbers, use them.\\n"
-        "\\n"
-        "Return ONLY JSON in this format:\\n"
-        "{\\n  \\\"criterion name\\\": {\\\"verdict\\\": \\\"yes|no|unknown\\\", \\\"reason\\\": \\\"Found: [quoted text]. [explanation]\\\"},\\n  ...\\n}\\n"
-    )
+    # Use custom system prompt if provided, otherwise use default
+    if custom_system_prompt:
+        system_prompt = custom_system_prompt
+    else:
+        system_prompt = (
+            "You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.\\n"
+            "\\n"
+            "For each criterion, you must perform the following steps:\\n"
+            "1.  **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.\\n"
+            "2.  **Analyze Evidence:** Look at the evidence you found.\\n"
+            "3.  **Make a Verdict:**\\n"
+            "    -   If the evidence directly confirms the criterion, the verdict is 'yes'.\\n"
+            "    -   If the evidence provides strong contextual clues that logically imply the criterion is met, the verdict is 'yes'. This requires you to connect different pieces of information to reach a conclusion.\\n"
+            "    -   If the evidence contradicts the criterion, the verdict is 'no'.\\n"
+            "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'.\\n"
+            "\\n"
+            "**Web Search (when needed):** You have access to web search for gathering additional data. Use it strategically when:\\n"
+            "- You find strong evidence but need one specific missing piece of quantitative data\\n"
+            "- The document clearly implies something but lacks the exact numbers needed\\n"
+            "- You find entity/location names that could yield specific measurements\\n"
+            "\\n"
+            "**Search Strategy:** Use broad, simple queries that are likely to find data. Accept any numerical data from search results, even if approximate. For locations, try searching for the city/region name plus the data type (e.g., 'Las Vegas solar irradiance', 'Nevada transmission lines').\\n"
+            "\\n"
+            "Do NOT return 'unknown' for quantitative criteria without first attempting web search. If search returns any relevant numbers, use them.\\n"
+            "\\n"
+            "Return ONLY JSON in this format:\\n"
+            "{\\n  \\\"criterion name\\\": {\\\"verdict\\\": \\\"yes|no|unknown\\\", \\\"reason\\\": \\\"Found: [quoted text]. [explanation]\\\"},\\n  ...\\n}\\n"
+        )
 
     user_prompt = (
         f"Criteria:\n{json.dumps(criteria, indent=2)}\n\n"
@@ -356,11 +363,11 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     return fallback_result
 
 
-def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 3) -> dict:
+def llm_screen(chunk: str, criteria: list[str], temperature: float = 0.0, max_rounds: int = 3, custom_system_prompt: str = None) -> dict:
     """Single-model screening with web search capability."""
     
     # Use web search version directly to test the fixes
-    return _screen_with_model(chunk, criteria, MODEL, temperature, max_rounds)
+    return _screen_with_model(chunk, criteria, MODEL, temperature, max_rounds, custom_system_prompt)
 
 
 def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:

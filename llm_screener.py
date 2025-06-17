@@ -124,7 +124,9 @@ def process_document(uploaded_file, criteria, progress_bar=None):
         for i, chunk in enumerate(chunks):
             chunk_name = f"chunk_{i+1}"
             try:
-                chunk_result = llm_screen(chunk, criteria)
+                # Check if custom system prompt is being used
+                custom_prompt = st.session_state.get('custom_system_prompt', None)
+                chunk_result = llm_screen(chunk, criteria, custom_system_prompt=custom_prompt)
                 
                 # Display debug info if available
                 if '_debug' in chunk_result:
@@ -322,9 +324,9 @@ def document_screening_page():
     # File upload
     uploaded_files = st.file_uploader(
         "Upload documents to screen",
-        type=['pdf', 'docx', 'doc', 'xlsx', 'xls'],
+        type=['pdf', 'docx', 'doc', 'xlsx', 'xls', 'csv'],
         accept_multiple_files=True,
-        help="Supported formats: PDF, DOCX, DOC, XLSX, XLS"
+        help="Supported formats: PDF, DOCX, DOC, XLSX, XLS, CSV"
     )
     
     # Criteria selection
@@ -437,6 +439,125 @@ def document_screening_page():
             for i, criterion in enumerate(criteria, 1):
                 st.markdown(f"**{i}.** {criterion}")
             st.caption("These are the criteria that will be used for screening.")
+    
+    # Advanced Settings
+    with st.expander("⚙️ Advanced Settings", expanded=False):
+        st.markdown("**System Prompt Customization**")
+        st.caption("Customize the AI's behavior for different use cases (e.g., financial analysis, sector ranking, etc.)")
+        
+        # Default system prompt for reference
+        default_prompt = """You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.
+
+For each criterion, you must perform the following steps:
+1. **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.
+2. **Analyze Evidence:** Look at the evidence you found.
+3. **Make a Verdict:**
+   - If the evidence directly confirms the criterion, the verdict is 'yes'.
+   - If the evidence provides strong contextual clues that logically imply the criterion is met, the verdict is 'yes'. This requires you to connect different pieces of information to reach a conclusion.
+   - If the evidence contradicts the criterion, the verdict is 'no'.
+   - If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'.
+
+**Web Search (when needed):** You have access to web search for gathering additional data. Use it strategically when:
+- You find strong evidence but need one specific missing piece of quantitative data
+- The document clearly implies something but lacks the exact numbers needed
+- You find entity/location names that could yield specific measurements
+
+**Search Strategy:** Use broad, simple queries that are likely to find data. Accept any numerical data from search results, even if approximate. For locations, try searching for the city/region name plus the data type (e.g., 'Las Vegas solar irradiance', 'Nevada transmission lines').
+
+Do NOT return 'unknown' for quantitative criteria without first attempting web search. If search returns any relevant numbers, use them.
+
+Return ONLY JSON in this format:
+{"criterion name": {"verdict": "yes|no|unknown", "reason": "Found: [quoted text]. [explanation]"}, ...}"""
+        
+        # Show current default system prompt for reference
+        st.markdown("**Current Default System Prompt:**")
+        show_default = st.checkbox("👁️ Show Default Prompt", key="show_default_prompt")
+        if show_default:
+            st.code(default_prompt, language="text")
+        
+        # Custom system prompt input - force refresh
+        use_custom_prompt = st.checkbox("Use custom system prompt (uncheck to use default prompt)", key="use_custom_prompt")
+        
+        if use_custom_prompt:
+            # Initialize prompt text if not exists
+            if 'prompt_text' not in st.session_state:
+                st.session_state['prompt_text'] = default_prompt
+            
+            prompt_col1, prompt_col2 = st.columns([4, 1])
+            
+            with prompt_col1:
+                custom_system_prompt = st.text_area(
+                    "Custom System Prompt:",
+                    value=st.session_state['prompt_text'],
+                    height=300,
+                    help="Define how the AI should analyze documents and criteria. Must include instructions to return JSON in the specified format.",
+                    key="custom_system_prompt_input"
+                )
+                # Update both state variables when user types
+                st.session_state['custom_system_prompt'] = custom_system_prompt
+                st.session_state['prompt_text'] = custom_system_prompt
+            
+            with prompt_col2:
+                st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
+                if st.button("🔄 Reset to Default", help="Reset the system prompt to the default template"):
+                    st.session_state['prompt_text'] = default_prompt
+                    st.rerun()
+        else:
+            if 'custom_system_prompt' in st.session_state:
+                del st.session_state['custom_system_prompt']
+        
+        # Example templates
+        st.markdown("---")
+        st.markdown("**📋 Example Templates**")
+        
+        # Define templates
+        financial_template = """You are a financial analyst specializing in sector performance evaluation. Analyze the provided data against each criterion and determine performance ratings.
+
+For each criterion:
+1. **Extract Data:** Find relevant financial metrics, ratios, or performance indicators
+2. **Calculate/Compare:** Evaluate against benchmarks or thresholds specified in the criterion
+3. **Rate Performance:** 
+   - 'yes' = Criterion met/outperformed
+   - 'no' = Criterion not met/underperformed  
+   - 'unknown' = Insufficient data
+
+Use web search for missing market data, benchmarks, or sector averages when needed.
+
+Return JSON: {"criterion": {"verdict": "yes|no|unknown", "reason": "Data: [values]. Analysis: [explanation]"}}"""
+
+        classification_template = """You are a document classifier. Analyze the document content to determine if it matches each classification criterion.
+
+For each criterion:
+1. **Content Analysis:** Identify key themes, topics, and document type indicators
+2. **Pattern Matching:** Look for specific formats, structures, or content patterns
+3. **Classify:**
+   - 'yes' = Document matches this classification
+   - 'no' = Document does not match
+   - 'unknown' = Ambiguous or insufficient content
+
+Return JSON: {"criterion": {"verdict": "yes|no|unknown", "reason": "Found: [evidence]. Classification: [reasoning]"}}"""
+        
+        template_col1, template_col2 = st.columns(2)
+        
+        with template_col1:
+            st.markdown("**Financial Sector Analysis:**")
+            st.code(financial_template)
+            if st.button("📋 Use Financial Template", key="use_financial_template"):
+                if use_custom_prompt:
+                    st.session_state['prompt_text'] = financial_template
+                    st.rerun()
+                else:
+                    st.warning("Please enable 'Use Custom System Prompt' first to use this template.")
+        
+        with template_col2:
+            st.markdown("**Document Classification:**")
+            st.code(classification_template)
+            if st.button("📋 Use Classification Template", key="use_classification_template"):
+                if use_custom_prompt:
+                    st.session_state['prompt_text'] = classification_template
+                    st.rerun()
+                else:
+                    st.warning("Please enable 'Use Custom System Prompt' first to use this template.")
     
     # Screening section
     if uploaded_files and criteria:
