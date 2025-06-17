@@ -90,16 +90,16 @@ def chat_complete(prompt: str, temperature: float, max_tokens: int = 2048, json_
 
 
 def _web_search_tool_spec():
-    """Return Gemini function spec for web_search."""
+    """Creates the web search tool specification for Gemini."""
     return genai.protos.FunctionDeclaration(
         name="web_search",
-        description="Search the public web ONLY when absolutely critical information is completely missing from the document. Use sparingly.",
+        description="Search the web for missing quantitative data before marking criteria as 'unknown'. Use this when you find partial information (like a substation name) but need specific numbers (like capacity, voltage, distance, cost). REQUIRED before returning 'unknown' for any quantitative criterion.",
         parameters=genai.protos.Schema(
             type=genai.protos.Type.OBJECT,
             properties={
                 "query": genai.protos.Schema(
                     type=genai.protos.Type.STRING,
-                    description="The search query to look up on the web."
+                    description="Specific search query for missing data (e.g., 'Harry Allen Substation capacity MW', 'BLM land lease cost Nevada per acre')"
                 )
             },
             required=["query"]
@@ -113,25 +113,29 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
     """Internal helper that runs the full tool-calling loop with a given model."""
 
     system_prompt = (
-        "You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.\n"
-        "\n"
-        "For each criterion, you must perform the following steps:\n"
-        "1.  **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.\n"
-        "2.  **Analyze Evidence:** Look at the evidence you found.\n"
-        "3.  **Make a Verdict:**\n"
-        "    -   If the evidence directly confirms the criterion, the verdict is 'yes'.\n"
-        "    -   If the evidence provides strong contextual clues that logically imply the criterion is met, the verdict is 'yes'. This requires you to connect different pieces of information to reach a conclusion.\n"
-        "    -   If the evidence contradicts the criterion, the verdict is 'no'.\n"
-        "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'. For criteria that require specific numbers (e.g., cost, distance, capacity), if you cannot find a specific number, the verdict MUST be 'unknown'.\n"
-        "\n"
-        "If a criterion requires quantitative data that is missing from the document **and** cannot be inferred logically, CALL the `web_search` tool to look up authoritative information (e.g., typical lease rates, official setback distances). Use at most one search query per missing criterion.\n"
-        "\n"
-        "**Output Format:**\n"
-        "Return ONLY a single JSON object. The keys must be the exact criterion strings.\n"
-        "{\n"
-        '  "criterion name": {"verdict": "yes|no|unknown", "reason": "Found: [Your quoted text here]. [Your brief explanation here]."},\n'
-        "  ...\n"
-        "}\n"
+        "You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.\\n"
+        "\\n"
+        "For each criterion, you must perform the following steps:\\n"
+        "1.  **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.\\n"
+        "2.  **Analyze Evidence:** Look at the evidence you found.\\n"
+        "3.  **Make a Verdict:**\\n"
+        "    -   If the evidence directly confirms the criterion, the verdict is 'yes'.\\n"
+        "    -   If the evidence provides strong contextual clues that logically imply the criterion is met, the verdict is 'yes'. This requires you to connect different pieces of information to reach a conclusion.\\n"
+        "    -   If the evidence contradicts the criterion, the verdict is 'no'.\\n"
+        "    -   If there is no evidence, or the evidence is insufficient to make a logical conclusion, the verdict is 'unknown'.\\n"
+        "\\n"
+        "**IMPORTANT - Use Web Search:** When you find evidence that partially meets a criterion but is missing specific quantitative data, you MUST call the web_search function to find the missing information. Examples:\\n"
+        "- If you find a facility name but not its capacity/size, search for: '[facility name] capacity' or '[facility name] specifications'\\n"
+        "- If you find a measurement in one unit but need another, search for: '[value] [unit1] to [unit2] conversion'\\n"
+        "- If you find a location but need specific data about it, search for: '[location] [specific data needed]'\\n"
+        "- If you find an entity but need missing quantitative details, search for: '[entity name] [missing detail]'\\n"
+        "\\n"
+        "**Search Strategy:** Use broad, simple queries that are likely to find data. Accept any numerical data from search results, even if approximate. For locations, try searching for the city/region name plus the data type (e.g., 'Las Vegas solar irradiance', 'Nevada transmission lines').\\n"
+        "\\n"
+        "Do NOT return 'unknown' for quantitative criteria without first attempting web search. If search returns any relevant numbers, use them.\\n"
+        "\\n"
+        "Return ONLY JSON in this format:\\n"
+        "{\\n  \\\"criterion name\\\": {\\\"verdict\\\": \\\"yes|no|unknown\\\", \\\"reason\\\": \\\"Found: [quoted text]. [explanation]\\\"},\\n  ...\\n}\\n"
     )
 
     user_prompt = (
@@ -210,6 +214,33 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                         for part in candidate.content.parts:
                             if hasattr(part, 'text') and part.text:
                                 response_text += part.text
+                            # Check for function calls in parts
+                            elif hasattr(part, 'function_call'):
+                                debug_messages.append("DEBUG: Found function_call in response parts")
+                                func_call = part.function_call
+                                if func_call.name == 'web_search':
+                                    query = func_call.args.get('query', '')
+                                    debug_messages.append(f"DEBUG: Executing web_search with query: {query}")
+                                    search_result = web_search_func(query)
+                                    debug_messages.append(f"DEBUG: Web search result length: {len(search_result)}")
+                                    
+                                    # Send search result back to model
+                                    function_response = genai.protos.Part(
+                                        function_response=genai.protos.FunctionResponse(
+                                            name='web_search',
+                                            response={'result': search_result}
+                                        )
+                                    )
+                                    new_response = chat.send_message(function_response)
+                                    
+                                    # Process the new response
+                                    try:
+                                        response_text = new_response.text or ""
+                                        debug_messages.append(f"DEBUG: Got response after web search, text length: {len(response_text)}")
+                                    except (ValueError, AttributeError) as e:
+                                        debug_messages.append(f"DEBUG: Could not access response.text after web search: {e}")
+                                        response_text = ""
+                                    break  # Exit the parts loop after handling function call
             
             debug_messages.append(f"DEBUG: Got response, text length: {len(response_text)}")
             
@@ -255,8 +286,9 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                                             debug_messages.append(f"DEBUG: Could not access response.text after web search: {e}")
                                             response_text = ""
                 else:
-                    debug_messages.append(f"DEBUG: Unexpected finish reason: {reason_str}")
-                    return {"_debug": debug_messages}
+                    if not response_text:  # Only return error if we truly have no content
+                        debug_messages.append(f"DEBUG: No content and finish reason: {reason_str}")
+                        return {"_debug": debug_messages}
             
             # Try to parse JSON response
             if response_text:
@@ -276,6 +308,19 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                             # Check if any keys match our criteria
                             matching_criteria = [crit for crit in criteria if crit in result]
                             debug_messages.append(f"DEBUG: Matching criteria found: {len(matching_criteria)}")
+                            
+                            # Check for quantitative criteria that are unknown (might need web search)
+                            quantitative_keywords = ['≥', '≤', '$', 'km', 'MW', 'kWh', '%', 'months']
+                            unknown_quantitative = []
+                            for crit, verdict_data in result.items():
+                                if isinstance(verdict_data, dict) and verdict_data.get('verdict', '').lower() == 'unknown':
+                                    if any(keyword in crit for keyword in quantitative_keywords):
+                                        unknown_quantitative.append(crit)
+                            
+                            if unknown_quantitative:
+                                debug_messages.append(f"DEBUG: Found {len(unknown_quantitative)} unknown quantitative criteria that could benefit from web search:")
+                                for crit in unknown_quantitative[:3]:  # Show first 3
+                                    debug_messages.append(f"DEBUG:   - {crit[:80]}...")
                             
                             # Store debug info for potential display
                             result['_debug'] = debug_messages

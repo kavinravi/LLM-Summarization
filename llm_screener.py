@@ -170,6 +170,12 @@ def format_verdict_results(verdicts):
     """Format verdict results for display, consolidating duplicate short-name keys."""
     all_results = {}
     
+    # Debug: Log what chunks we're processing
+    print(f"DEBUG: format_verdict_results processing {len(verdicts)} chunks:")
+    for chunk_name in verdicts.keys():
+        chunk_data = verdicts[chunk_name]
+        print(f"  - {chunk_name}: {len(chunk_data)} criteria")
+    
     # Build a helper mapping from prefix to full criterion string (if available)
     original_criteria = st.session_state.get('used_criteria', [])
     prefix_map = {}
@@ -185,6 +191,7 @@ def format_verdict_results(verdicts):
     
     # Aggregate results from all chunks
     for chunk_name, chunk_results in verdicts.items():
+        print(f"DEBUG: Processing {chunk_name} with {len(chunk_results)} results")
         for criterion, result in chunk_results.items():
             criterion = _map_name(criterion)
             if criterion not in all_results:
@@ -201,6 +208,7 @@ def format_verdict_results(verdicts):
                 verdict = str(result).lower()
                 reason = 'No reason provided'
             
+            print(f"DEBUG:   {criterion}: {verdict}")
             if verdict == 'yes':
                 all_results[criterion]['yes_count'] += 1
             elif verdict == 'no':
@@ -209,6 +217,12 @@ def format_verdict_results(verdicts):
                 all_results[criterion]['no_count'] += 1
             
             all_results[criterion]['reasons'].append(f"{chunk_name}: {reason}")
+    
+    # Debug: Show final counts
+    print("DEBUG: Final aggregated results:")
+    for criterion, result in all_results.items():
+        total = result['yes_count'] + result['no_count']
+        print(f"  {criterion}: {result['yes_count']} yes, {result['no_count']} no (total: {total})")
     
     return all_results
 
