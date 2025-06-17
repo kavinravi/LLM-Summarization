@@ -22,6 +22,7 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 # Import web_search locally when needed to avoid import issues
 from typing import Optional  # For Python <3.10 union
+import re
 
 # ---------- ENVIRONMENT ----------
 load_dotenv()  # Load environment variables from .env file
@@ -35,8 +36,10 @@ def get_env_var(key: str, default: str = None) -> str:
         return os.getenv(key, default)
 
 # Single model configuration
-MODEL = get_env_var("GEMINI_MODEL", "gemini-2.5-flash-preview")
+MODEL = get_env_var("GEMINI_MODEL", "gemini-2.5-flash")
 print(f"DEBUG: Loaded MODEL = {MODEL}")
+print(f"DEBUG: GEMINI_MODEL env var = {os.getenv('GEMINI_MODEL', 'NOT_SET')}")
+print(f"DEBUG: .env loaded = {os.path.exists('.env')}")
 
 # Configure Gemini
 genai.configure(api_key=get_env_var("GOOGLE_API_KEY"))
@@ -141,15 +144,20 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
         {"role": "user", "content": user_prompt},
     ]
 
-    tool_spec = _web_search_tool_spec()
-
-    # For Streamlit debugging
+    # Temporarily disable web search tool to debug safety issues
+    web_search_tool_spec = _web_search_tool_spec()
+    gemini_model = genai.GenerativeModel(
+        model_name=model,
+        tools=[web_search_tool_spec],
+        system_instruction=system_prompt
+    )
     debug_messages = []
     debug_messages.append(f"DEBUG: Starting screening with {len(criteria)} criteria")
     debug_messages.append(f"DEBUG: Criteria: {criteria}")
     debug_messages.append(f"DEBUG: Chunk length: {len(chunk)} chars")
     debug_messages.append(f"DEBUG: Chunk preview (first 500 chars): {repr(chunk[:500])}")
     debug_messages.append(f"DEBUG: Model: {model}, Temperature: {temperature}, Max rounds: {max_rounds}")
+    debug_messages.append("DEBUG: Created model WITH web_search tool enabled")
     
     # Web search function for Gemini tool-calling
     def web_search_func(query: str):
@@ -164,20 +172,6 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             debug_messages.append(f"DEBUG: Could not import web_search: {e}")
             return f"Web search unavailable for query: {query}"
     
-    # Configure generation with function calling
-    generation_config = {
-        "temperature": temperature,
-        "max_output_tokens": 4096,
-    }
-    
-    # Create model WITH the web_search tool enabled
-    gemini_model = genai.GenerativeModel(
-        model_name=model,
-        tools=[tool_spec],
-        generation_config=generation_config
-    )
-    debug_messages.append("DEBUG: Created model WITH web_search tool enabled")
-    
     # Create chat session (tool execution handled manually in loop)
     chat = gemini_model.start_chat()
     
@@ -190,61 +184,114 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
             full_prompt = f"{system_prompt}\n\n{user_prompt}"
             response = chat.send_message(full_prompt)
             
-            debug_messages.append(f"DEBUG: Got response, text length: {len(response.text or '')}")
+            # Check if response has valid content
+            response_text = ""
+            finish_reason = None
             
-            # Log if response includes a function call
-            if hasattr(response, "candidates") and response.candidates:
-                finish_val = getattr(response.candidates[0], "finish_reason", None)
-                if finish_val is not None:
-                    # Convert enum or object to string safely
-                    if hasattr(finish_val, "name"):
-                        finish_str = finish_val.name
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                finish_reason = getattr(candidate, 'finish_reason', None)
+                
+                # Log finish reason for debugging
+                if finish_reason is not None:
+                    if hasattr(finish_reason, 'name'):
+                        finish_str = finish_reason.name
                     else:
-                        finish_str = str(finish_val)
-                    if "FUNCTION_CALL" in finish_str.upper():
-                        debug_messages.append("DEBUG: Model invoked web_search function")
-            
-            # Try to parse the response as JSON
-            if response.text:
-                debug_messages.append(f"DEBUG: Attempting to parse JSON response")
-                debug_messages.append(f"DEBUG: Full response content: {repr(response.text)}")
+                        finish_str = str(finish_reason)
+                    debug_messages.append(f"DEBUG: Finish reason: {finish_str}")
                 
-                # Try to clean up the response if it has markdown formatting
-                content = response.text.strip()
-                if content.startswith("```json"):
-                    content = content[7:]
-                if content.endswith("```"):
-                    content = content[:-3]
-                content = content.strip()
-                
-                debug_messages.append(f"DEBUG: Cleaned content: {repr(content)}")
-                
+                # Try to get response text safely
                 try:
-                    result = json.loads(content)
-                    debug_messages.append(f"DEBUG: JSON parsing successful, type: {type(result)}")
-                    if isinstance(result, dict):
-                        debug_messages.append(f"DEBUG: Successfully parsed JSON with {len(result)} items")
-                        debug_messages.append(f"DEBUG: JSON keys: {list(result.keys())}")
-                        
-                        # Check if any keys match our criteria
-                        matching_criteria = [crit for crit in criteria if crit in result]
-                        debug_messages.append(f"DEBUG: Matching criteria found: {len(matching_criteria)}")
-                        
-                        # Store debug info for potential display
-                        result['_debug'] = debug_messages
-                        # Ensure every criterion is present; if missing, mark unknown
-                        for crit in criteria:
-                            if crit not in result:
-                                debug_messages.append(f"DEBUG: Missing criterion '{crit}', adding as unknown")
-                                result[crit] = {"verdict": "unknown", "reason": "Not mentioned"}
-                        return result
-                    else:
-                        debug_messages.append(f"DEBUG: JSON result is not a dict: {type(result)}")
-                except json.JSONDecodeError as e:
-                    debug_messages.append(f"DEBUG: JSON parse error: {e}")
-                    debug_messages.append(f"DEBUG: Problematic content: {repr(content[:500])}")
-                    # fall through to retry
-                    pass
+                    response_text = response.text or ""
+                except (ValueError, AttributeError) as e:
+                    debug_messages.append(f"DEBUG: Could not access response.text: {e}")
+                    # Try to get text from parts directly
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                response_text += part.text
+            
+            debug_messages.append(f"DEBUG: Got response, text length: {len(response_text)}")
+            
+            # Check for safety blocks or other issues
+            if not response_text and finish_reason:
+                if hasattr(finish_reason, 'name'):
+                    reason_str = finish_reason.name
+                else:
+                    reason_str = str(finish_reason)
+                
+                if reason_str in ['SAFETY', 'BLOCKED_REASON_SAFETY']:
+                    debug_messages.append(f"DEBUG: Response blocked for safety reasons: {reason_str}")
+                    return {"_debug": debug_messages}
+                elif reason_str == 'FUNCTION_CALL':
+                    debug_messages.append("DEBUG: Model invoked web_search function")
+                    # Handle function calling
+                    if hasattr(response, 'candidates') and response.candidates:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'function_call'):
+                                    func_call = part.function_call
+                                    if func_call.name == 'web_search':
+                                        query = func_call.args.get('query', '')
+                                        debug_messages.append(f"DEBUG: Executing web_search with query: {query}")
+                                        search_result = web_search_func(query)
+                                        debug_messages.append(f"DEBUG: Web search result length: {len(search_result)}")
+                                        
+                                        # Send search result back to model
+                                        function_response = genai.protos.Part(
+                                            function_response=genai.protos.FunctionResponse(
+                                                name='web_search',
+                                                response={'result': search_result}
+                                            )
+                                        )
+                                        response = chat.send_message(function_response)
+                                        
+                                        # Process the new response
+                                        try:
+                                            response_text = response.text or ""
+                                            debug_messages.append(f"DEBUG: Got response after web search, text length: {len(response_text)}")
+                                        except (ValueError, AttributeError) as e:
+                                            debug_messages.append(f"DEBUG: Could not access response.text after web search: {e}")
+                                            response_text = ""
+                else:
+                    debug_messages.append(f"DEBUG: Unexpected finish reason: {reason_str}")
+                    return {"_debug": debug_messages}
+            
+            # Try to parse JSON response
+            if response_text:
+                debug_messages.append("DEBUG: Attempting to parse JSON response")
+                debug_messages.append(f"DEBUG: Full response content: {repr(response_text[:1000])}")
+                
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+                    try:
+                        result = json.loads(json_str)
+                        debug_messages.append(f"DEBUG: JSON parsing successful, type: {type(result)}")
+                        if isinstance(result, dict):
+                            debug_messages.append(f"DEBUG: Successfully parsed JSON with {len(result)} items")
+                            debug_messages.append(f"DEBUG: JSON keys: {list(result.keys())}")
+                            
+                            # Check if any keys match our criteria
+                            matching_criteria = [crit for crit in criteria if crit in result]
+                            debug_messages.append(f"DEBUG: Matching criteria found: {len(matching_criteria)}")
+                            
+                            # Store debug info for potential display
+                            result['_debug'] = debug_messages
+                            # Ensure every criterion is present; if missing, mark unknown
+                            for crit in criteria:
+                                if crit not in result:
+                                    debug_messages.append(f"DEBUG: Missing criterion '{crit}', adding as unknown")
+                                    result[crit] = {"verdict": "unknown", "reason": "Not mentioned"}
+                            return result
+                        else:
+                            debug_messages.append(f"DEBUG: JSON result is not a dict: {type(result)}")
+                    except json.JSONDecodeError as e:
+                        debug_messages.append(f"DEBUG: JSON parse error: {e}")
+                        debug_messages.append(f"DEBUG: Problematic content: {repr(response_text[:500])}")
+                        # fall through to retry
+                        pass
             else:
                 debug_messages.append(f"DEBUG: No content in response")
 
