@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Streamlit secrets (contains API keys)
+.streamlit/secrets.toml
+
 # Python cache and bytecode
 __pycache__/
 *.py[cod]
