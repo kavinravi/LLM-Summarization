@@ -17,19 +17,19 @@ from datetime import datetime
 import pandas as pd
 
 # Import our existing utility functions
-from llm_util import extract_text, llm_screen, llm_blurb
+from llm_util import extract_text, llm_screen, llm_blurb, llm_summarize
 import textwrap
 
 # Page configuration
 st.set_page_config(
-    page_title="Project Document Screener",
+    page_title="Document Analysis & Screening Tool",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Constants
-CHUNK_SIZE_CHARS = 150000  # Gemini 2.5 flash supports much larger context
+CHUNK_SIZE_CHARS = 15000  # Smaller chunks to avoid MAX_TOKENS output error
 
 # Cache directory for persistent storage
 CACHE_DIR = "cache/screening_cache"
@@ -168,6 +168,66 @@ def process_document(uploaded_file, criteria, progress_bar=None):
                 pass
         raise e
 
+def process_holistic_summary(uploaded_files, focus_areas, progress_bar=None, status_text=None):
+    """Extract text from all files, combine, and process for summarization."""
+    try:
+        # 1. Extract text from all files
+        all_raw_text = []
+        for file_idx, uploaded_file in enumerate(uploaded_files):
+            if status_text:
+                status_text.text(f"Extracting text from {uploaded_file.name} ({file_idx + 1}/{len(uploaded_files)})")
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp_file:
+                tmp_file.write(uploaded_file.getbuffer())
+                tmp_file_path = tmp_file.name
+            
+            raw_text = extract_text(tmp_file_path)
+            all_raw_text.append(raw_text)
+            os.unlink(tmp_file_path)
+
+        # 2. Combine text
+        combined_text = "\n\n--- END OF DOCUMENT ---\n\n".join(all_raw_text)
+        
+        if progress_bar:
+            progress_bar.progress(40, "Chunking combined document...")
+        
+        # 3. Split into chunks
+        chunks = textwrap.wrap(combined_text, CHUNK_SIZE_CHARS)
+        
+        if progress_bar:
+            progress_bar.progress(60, "Generating summaries...")
+        
+        # 4. Summarize each chunk
+        summaries = {}
+        for i, chunk in enumerate(chunks):
+            chunk_name = f"chunk_{i+1}"
+            if status_text:
+                status_text.text(f"Summarizing chunk {i+1} of {len(chunks)}...")
+            try:
+                chunk_summary = llm_summarize(chunk, focus_areas)
+                summaries[chunk_name] = chunk_summary
+                
+                if progress_bar:
+                    progress = 60 + (30 * (i + 1) / len(chunks))
+                    progress_bar.progress(int(progress))
+                    
+            except Exception as e:
+                st.error(f"Error summarizing chunk {i+1}: {str(e)}")
+                # Continue with remaining chunks
+                summaries[chunk_name] = {
+                    "executive_summary": f"Error processing chunk {i+1}: {str(e)}",
+                    "key_highlights": [f"Processing failed for chunk {i+1}"],
+                    "main_sections": {}, "focus_area_insights": {}, "data_points": [], "action_items": []
+                }
+        
+        if progress_bar:
+            progress_bar.progress(100, "Complete!")
+        
+        return summaries, combined_text
+
+    except Exception as e:
+        raise e
+
 def format_verdict_results(verdicts):
     """Format verdict results for display, consolidating duplicate short-name keys."""
     all_results = {}
@@ -290,11 +350,203 @@ def consolidate_chunk_results(verdicts, criteria):
     
     return consolidated
 
+def consolidate_summaries(chunk_summaries):
+    """Consolidate summaries from multiple chunks into one comprehensive summary."""
+    if not chunk_summaries:
+        return {
+            "executive_summary": "No summaries available",
+            "key_highlights": [],
+            "main_sections": {},
+            "focus_area_insights": {},
+            "data_points": [],
+            "action_items": []
+        }
+    
+    # Initialize consolidated structure
+    consolidated = {
+        "executive_summary": "",
+        "key_highlights": [],
+        "main_sections": {},
+        "focus_area_insights": {},
+        "data_points": [],
+        "action_items": []
+    }
+    
+    executive_summaries = []
+    all_highlights = []
+    all_sections = {}
+    all_focus_insights = {}
+    all_data_points = []
+    all_action_items = []
+    
+    # Collect from all chunks
+    for chunk_name, summary in chunk_summaries.items():
+        if isinstance(summary, dict):
+            # Executive summary
+            exec_sum = summary.get('executive_summary', '')
+            if exec_sum and exec_sum != "No summaries available":
+                executive_summaries.append(exec_sum)
+            
+            # Key highlights
+            highlights = summary.get('key_highlights', [])
+            if isinstance(highlights, list):
+                all_highlights.extend(highlights)
+            
+            # Main sections
+            sections = summary.get('main_sections', {})
+            if isinstance(sections, dict):
+                for section_name, section_data in sections.items():
+                    if section_name not in all_sections:
+                        all_sections[section_name] = {
+                            'summary': [],
+                            'key_points': [],
+                            'citations': []
+                        }
+                    
+                    if isinstance(section_data, dict):
+                        all_sections[section_name]['summary'].append(section_data.get('summary', ''))
+                        all_sections[section_name]['key_points'].extend(section_data.get('key_points', []))
+                        all_sections[section_name]['citations'].extend(section_data.get('citations', []))
+            
+            # Focus area insights
+            focus_insights = summary.get('focus_area_insights', {})
+            if isinstance(focus_insights, dict):
+                for focus_area, insight_data in focus_insights.items():
+                    if focus_area not in all_focus_insights:
+                        all_focus_insights[focus_area] = {
+                            'findings': [],
+                            'citations': []
+                        }
+                    
+                    if isinstance(insight_data, dict):
+                        all_focus_insights[focus_area]['findings'].append(insight_data.get('findings', ''))
+                        all_focus_insights[focus_area]['citations'].extend(insight_data.get('citations', []))
+            
+            # Data points and action items
+            data_points = summary.get('data_points', [])
+            if isinstance(data_points, list):
+                all_data_points.extend(data_points)
+                
+            action_items = summary.get('action_items', [])
+            if isinstance(action_items, list):
+                all_action_items.extend(action_items)
+    
+    # Consolidate executive summary
+    if executive_summaries:
+        consolidated['executive_summary'] = " ".join(executive_summaries)
+    
+    # Remove duplicates and consolidate
+    consolidated['key_highlights'] = list(set(all_highlights))[:10]  # Top 10 unique highlights
+    
+    # Consolidate sections
+    for section_name, section_data in all_sections.items():
+        consolidated['main_sections'][section_name] = {
+            'summary': " ".join(filter(None, section_data['summary'])),
+            'key_points': list(set(section_data['key_points'])),
+            'citations': list(set(section_data['citations']))
+        }
+    
+    # Consolidate focus area insights
+    for focus_area, insight_data in all_focus_insights.items():
+        consolidated['focus_area_insights'][focus_area] = {
+            'findings': " ".join(filter(None, insight_data['findings'])),
+            'citations': list(set(insight_data['citations']))
+        }
+    
+    # Remove duplicates
+    consolidated['data_points'] = list(set(all_data_points))
+    consolidated['action_items'] = list(set(all_action_items))
+    
+    return consolidated
+
+def display_structured_summary(summary, focus_areas):
+    """Display a structured summary in Streamlit with nice formatting."""
+    if not isinstance(summary, dict):
+        st.error("Invalid summary format")
+        return
+    
+    # Executive Summary
+    exec_summary = summary.get('executive_summary', '')
+    if exec_summary:
+        st.subheader("📋 Executive Summary")
+        st.write(exec_summary)
+        st.markdown("---")
+    
+    # Key Highlights
+    highlights = summary.get('key_highlights', [])
+    if highlights:
+        st.subheader("✨ Key Highlights")
+        for i, highlight in enumerate(highlights[:8], 1):  # Show top 8
+            st.write(f"**{i}.** {highlight}")
+        st.markdown("---")
+    
+    # Focus Area Insights (if focus areas were specified)
+    focus_insights = summary.get('focus_area_insights', {})
+    if focus_insights and focus_areas:
+        st.subheader("🎯 Focus Area Insights")
+        for focus_area, insight_data in focus_insights.items():
+            if isinstance(insight_data, dict):
+                st.markdown(f"#### 📌 {focus_area}")
+                findings = insight_data.get('findings', '')
+                if findings:
+                    st.write("**Findings:**")
+                    st.write(findings)
+                
+                citations = insight_data.get('citations', [])
+                if citations:
+                    st.write("**Key Quotes:**")
+                    for citation in citations[:3]:  # Show top 3 citations
+                        st.quote(citation)
+        st.markdown("---")
+    
+    # Main Sections
+    main_sections = summary.get('main_sections', {})
+    if main_sections:
+        st.subheader("📑 Main Sections")
+        for section_name, section_data in main_sections.items():
+            if isinstance(section_data, dict):
+                st.markdown(f"#### 📁 {section_name}")
+                section_summary = section_data.get('summary', '')
+                if section_summary:
+                    st.write("**Summary:**")
+                    st.write(section_summary)
+                
+                key_points = section_data.get('key_points', [])
+                if key_points:
+                    st.write("**Key Points:**")
+                    for point in key_points[:5]:  # Show top 5 points
+                        st.write(f"• {point}")
+                
+                citations = section_data.get('citations', [])
+                if citations:
+                    st.write("**Citations:**")
+                    for citation in citations[:2]:  # Show top 2 citations
+                        st.quote(citation)
+        st.markdown("---")
+    
+    # Data Points
+    data_points = summary.get('data_points', [])
+    if data_points:
+        st.subheader("📊 Key Data Points")
+        cols = st.columns(2)
+        for i, data_point in enumerate(data_points[:10]):  # Show top 10
+            col_idx = i % 2
+            with cols[col_idx]:
+                st.write(f"📈 {data_point}")
+        st.markdown("---")
+    
+    # Action Items
+    action_items = summary.get('action_items', [])
+    if action_items:
+        st.subheader("🎯 Recommended Actions")
+        for i, action in enumerate(action_items[:8], 1):  # Show top 8
+            st.write(f"**{i}.** {action}")
+
 # Main app
 def main():
     # Header
-    st.title("Project Document Screener")
-    st.markdown("Upload documents and screen them against custom criteria using AI analysis.")
+    st.title("Document Analysis & Screening Tool")
+    st.markdown("Upload documents for AI-powered screening against criteria or comprehensive summarization with focus areas.")
     
     # Load cached results on startup
     if 'cached_sessions' not in st.session_state:
@@ -303,13 +555,13 @@ def main():
     # Sidebar for navigation
     st.sidebar.title("Navigation")
     page = st.sidebar.selectbox("Choose a page", [
-        "📄 Document Screening", 
+        "📄 Document Analysis", 
         "📊 Results Analysis",
         "✍️ Marketing Blurb Generator",
         "💾 Cached Results"
     ])
     
-    if page == "📄 Document Screening":
+    if page == "📄 Document Analysis":
         document_screening_page()
     elif page == "📊 Results Analysis":
         results_analysis_page()
@@ -319,158 +571,171 @@ def main():
         cached_results_page()
 
 def document_screening_page():
-    st.header("Document Screening")
+    st.header("Document Analysis")
     
-    # File uploader
-    uploaded_files = st.file_uploader(
-        "Choose files to screen",
-        type=['pdf', 'docx', 'xlsx', 'csv'],
-        accept_multiple_files=True,
-        help="Upload documents (PDF, Word, Excel, CSV) for screening"
+    # Mode selector
+    st.subheader("📊 Analysis Mode")
+    analysis_mode = st.radio(
+        "Choose analysis type:",
+        ["🔍 Screening (Pass/Fail against criteria)", "📝 Summarization (Structured document summary)"],
+        horizontal=True,
+        help="Screening evaluates documents against specific criteria. Summarization provides structured insights and highlights."
     )
     
-    # Criteria section
-    st.subheader("📋 Screening Criteria")
-    st.markdown("---")  # Visual separator
+    st.markdown("---")
     
-    col1, col2 = st.columns([3, 1])
+    # File uploader
+    mode_text = "screen" if "Screening" in analysis_mode else "summarize"
+    uploaded_files = st.file_uploader(
+        f"Choose files to {mode_text}",
+        type=['pdf', 'docx', 'xlsx', 'csv'],
+        accept_multiple_files=True,
+        help=f"Upload documents (PDF, Word, Excel, CSV) for {mode_text.replace('screen', 'screening')}"
+    )
     
-    with col1:
-        # Load default criteria
-        default_criteria = load_default_criteria()
+    # Mode-specific configuration section
+    if "Screening" in analysis_mode:
+        st.subheader("📋 Screening Criteria")
+        st.markdown("---")  # Visual separator
         
-        # Format criteria with numbers for better readability
-        formatted_criteria = []
-        for i, criterion in enumerate(default_criteria, 1):
-            formatted_criteria.append(f"{i}. {criterion}")
+        col1, col2 = st.columns([3, 1])
         
-        # Initialize criteria text in session state if not exists
-        if 'criteria_text_state' not in st.session_state:
-            st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria)
-        
-        # Use auto-formatted content if available, or custom loaded content, otherwise use stored state
-        if 'auto_format_criteria' in st.session_state:
-            display_value = st.session_state['auto_format_criteria']
-        elif 'load_custom_criteria' in st.session_state:
-            display_value = st.session_state['load_custom_criteria']
-            # Clear the flag after using it
-            del st.session_state['load_custom_criteria']
-        else:
-            display_value = st.session_state['criteria_text_state']
-        
-        # Allow users to modify criteria with auto-numbering
-        criteria_text = st.text_area(
-            "Edit criteria (one per line):",
-            value=display_value,  # Use either auto-formatted, custom loaded, or stored state
-            height=400,  # Increased height to accommodate better formatting
-            help="Each line represents one screening criterion. Add new criteria on new lines, then click 'Auto-Number' to format!",
-            key="criteria_text_area"
-        )
-        
-        # Update the stored state when user changes criteria (but not if we just loaded custom criteria)
-        if 'load_custom_criteria' not in st.session_state:
-            st.session_state['criteria_text_state'] = criteria_text
-        
-        # Clear the auto-format state after using it
-        if 'auto_format_criteria' in st.session_state:
-            del st.session_state['auto_format_criteria']
-        
-        # Parse criteria from text area and auto-renumber
-        import re
-        raw_lines = [line.strip() for line in criteria_text.split('\n') if line.strip()]
-        criteria = []
-        
-        # Extract actual criteria content (remove any existing numbering)
-        for line in raw_lines:
-            cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', line)
-            if cleaned_line:
-                criteria.append(cleaned_line)
-        
-        # Show auto-numbered preview of what they're editing
-        if criteria:
-            st.markdown("**✨ Auto-numbered preview:**")
-            preview_container = st.container()
-            with preview_container:
-                cols = st.columns(2)
-                for i, criterion in enumerate(criteria):
-                    col_idx = i % 2
-                    with cols[col_idx]:
-                        st.markdown(f"**{i+1}.** {criterion[:80]}{'...' if len(criterion) > 80 else ''}")
-            st.markdown("---")
-    
-    with col2:
-        st.markdown("**Criteria Management**")
-        
-        # Auto-format button
-        if st.button("🔢 Auto-Number", help="Automatically format and number all criteria"):
-            if criteria:
-                # Re-format with proper numbering and spacing
-                formatted_criteria_new = []
-                for i, criterion in enumerate(criteria, 1):
-                    formatted_criteria_new.append(f"{i}. {criterion}")
-                # Update session state to trigger re-render
-                st.session_state['auto_format_criteria'] = "\n\n".join(formatted_criteria_new)
-                st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria_new)
-                st.success("✨ Criteria auto-numbered!")
-                st.rerun()
-        
-        if st.button("📄 Load Default"):
-            # Reset to default criteria
+        with col1:
+            # Load default criteria
             default_criteria = load_default_criteria()
+            
+            # Format criteria with numbers for better readability
             formatted_criteria = []
             for i, criterion in enumerate(default_criteria, 1):
                 formatted_criteria.append(f"{i}. {criterion}")
-            # Use the special flag to force text area update
-            st.session_state['load_custom_criteria'] = "\n\n".join(formatted_criteria)
-            st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria)
-            st.success("Default criteria loaded!")
-            st.rerun()
-        
-        if st.button("💾 Save Custom"):
-            # Ensure the cache directory structure exists
-            os.makedirs("cache/criteria_cache", exist_ok=True)
             
-            with open("cache/criteria_cache/custom_criteria.json", "w", encoding="utf-8") as f:
-                json.dump(criteria, f, indent=2)
-            st.success("Custom criteria saved to cache/criteria_cache/!")
+            # Initialize criteria text in session state if not exists
+            if 'criteria_text_state' not in st.session_state:
+                st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria)
+            
+            # Use auto-formatted content if available, or custom loaded content, otherwise use stored state
+            if 'auto_format_criteria' in st.session_state:
+                display_value = st.session_state['auto_format_criteria']
+            elif 'load_custom_criteria' in st.session_state:
+                display_value = st.session_state['load_custom_criteria']
+                # Clear the flag after using it
+                del st.session_state['load_custom_criteria']
+            else:
+                display_value = st.session_state['criteria_text_state']
+            
+            # Allow users to modify criteria with auto-numbering
+            criteria_text = st.text_area(
+                "Edit criteria (one per line):",
+                value=display_value,  # Use either auto-formatted, custom loaded, or stored state
+                height=400,  # Increased height to accommodate better formatting
+                help="Each line represents one screening criterion. Add new criteria on new lines, then click 'Auto-Number' to format!",
+                key="criteria_text_area"
+            )
+            
+            # Update the stored state when user changes criteria (but not if we just loaded custom criteria)
+            if 'load_custom_criteria' not in st.session_state:
+                st.session_state['criteria_text_state'] = criteria_text
+            
+            # Clear the auto-format state after using it
+            if 'auto_format_criteria' in st.session_state:
+                del st.session_state['auto_format_criteria']
+            
+            # Parse criteria from text area and auto-renumber
+            import re
+            raw_lines = [line.strip() for line in criteria_text.split('\n') if line.strip()]
+            criteria = []
+            
+            # Extract actual criteria content (remove any existing numbering)
+            for line in raw_lines:
+                cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', line)
+                if cleaned_line:
+                    criteria.append(cleaned_line)
+            
+            # Show auto-numbered preview of what they're editing
+            if criteria:
+                st.markdown("**✨ Auto-numbered preview:**")
+                preview_container = st.container()
+                with preview_container:
+                    cols = st.columns(2)
+                    for i, criterion in enumerate(criteria):
+                        col_idx = i % 2
+                        with cols[col_idx]:
+                            st.markdown(f"**{i+1}.** {criterion[:80]}{'...' if len(criterion) > 80 else ''}")
+                st.markdown("---")
         
-        if st.button("📂 Load Custom"):
-            try:
-                with open("cache/criteria_cache/custom_criteria.json", "r", encoding="utf-8") as f:
-                    custom_criteria = json.load(f)
-                # Format the loaded criteria with numbers
-                formatted_custom = []
-                for i, criterion in enumerate(custom_criteria, 1):
-                    formatted_custom.append(f"{i}. {criterion}")
+        with col2:
+            st.markdown("**Criteria Management**")
+            
+            # Auto-format button
+            if st.button("🔢 Auto-Number", help="Automatically format and number all criteria"):
+                if criteria:
+                    # Re-format with proper numbering and spacing
+                    formatted_criteria_new = []
+                    for i, criterion in enumerate(criteria, 1):
+                        formatted_criteria_new.append(f"{i}. {criterion}")
+                    # Update session state to trigger re-render
+                    st.session_state['auto_format_criteria'] = "\n\n".join(formatted_criteria_new)
+                    st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria_new)
+                    st.success("✨ Criteria auto-numbered!")
+                    st.rerun()
+            
+            if st.button("📄 Load Default"):
+                # Reset to default criteria
+                default_criteria = load_default_criteria()
+                formatted_criteria = []
+                for i, criterion in enumerate(default_criteria, 1):
+                    formatted_criteria.append(f"{i}. {criterion}")
                 # Use the special flag to force text area update
-                st.session_state['load_custom_criteria'] = "\n\n".join(formatted_custom)
-                st.session_state['criteria_text_state'] = "\n\n".join(formatted_custom)
-                st.success("Custom criteria loaded from cache/criteria_cache/!")
+                st.session_state['load_custom_criteria'] = "\n\n".join(formatted_criteria)
+                st.session_state['criteria_text_state'] = "\n\n".join(formatted_criteria)
+                st.success("Default criteria loaded!")
                 st.rerun()
-            except FileNotFoundError:
-                st.error("No custom criteria file found in cache/criteria_cache/!")
-            except json.JSONDecodeError:
-                st.error("Error reading custom criteria file - invalid JSON format!")
-            except Exception as e:
-                st.error(f"Error loading custom criteria: {str(e)}")
-    
-    # Display number of criteria and preview
-    st.info(f"📋 {len(criteria)} criteria loaded")
-    
-    # Show a nice preview of the criteria
-    if criteria:
-        with st.expander("👀 Preview Current Criteria", expanded=False):
-            for i, criterion in enumerate(criteria, 1):
-                st.markdown(f"**{i}.** {criterion}")
-            st.caption("These are the criteria that will be used for screening.")
-    
-    # Advanced Settings
-    with st.expander("⚙️ Advanced Settings", expanded=False):
-        st.markdown("**System Prompt Customization**")
-        st.caption("Customize the AI's behavior for different use cases (e.g., financial analysis, sector ranking, etc.)")
+            
+            if st.button("💾 Save Custom"):
+                # Ensure the cache directory structure exists
+                os.makedirs("cache/criteria_cache", exist_ok=True)
+                
+                with open("cache/criteria_cache/custom_criteria.json", "w", encoding="utf-8") as f:
+                    json.dump(criteria, f, indent=2)
+                st.success("Custom criteria saved to cache/criteria_cache/!")
+            
+            if st.button("📂 Load Custom"):
+                try:
+                    with open("cache/criteria_cache/custom_criteria.json", "r", encoding="utf-8") as f:
+                        custom_criteria = json.load(f)
+                    # Format the loaded criteria with numbers
+                    formatted_custom = []
+                    for i, criterion in enumerate(custom_criteria, 1):
+                        formatted_custom.append(f"{i}. {criterion}")
+                    # Use the special flag to force text area update
+                    st.session_state['load_custom_criteria'] = "\n\n".join(formatted_custom)
+                    st.session_state['criteria_text_state'] = "\n\n".join(formatted_custom)
+                    st.success("Custom criteria loaded from cache/criteria_cache/!")
+                    st.rerun()
+                except FileNotFoundError:
+                    st.error("No custom criteria file found in cache/criteria_cache/!")
+                except json.JSONDecodeError:
+                    st.error("Error reading custom criteria file - invalid JSON format!")
+                except Exception as e:
+                    st.error(f"Error loading custom criteria: {str(e)}")
         
-        # Default system prompt for reference
-        default_prompt = """You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.
+        # Display number of criteria and preview
+        st.info(f"📋 {len(criteria)} criteria loaded")
+        
+        # Show a nice preview of the criteria
+        if criteria:
+            with st.expander("👀 Preview Current Criteria", expanded=False):
+                for i, criterion in enumerate(criteria, 1):
+                    st.markdown(f"**{i}.** {criterion}")
+                st.caption("These are the criteria that will be used for screening.")
+        
+        # Advanced Settings
+        with st.expander("⚙️ Advanced Settings", expanded=False):
+            st.markdown("**System Prompt Customization**")
+            st.caption("Customize the AI's behavior for different use cases (e.g., financial analysis, sector ranking, etc.)")
+            
+            # Default system prompt for reference
+            default_prompt = """You are a diligent project analyst. Your task is to analyze a document and determine if it meets a list of criteria.
 
 For each criterion, you must perform the following steps:
 1. **Find Evidence:** Scour the document for any text relevant to the criterion. You MUST quote the best snippet you find.
@@ -492,64 +757,64 @@ Do NOT return 'unknown' for quantitative criteria without first attempting web s
 
 Return ONLY JSON in this format:
 {"criterion name": {"verdict": "yes|no|unknown", "reason": "Found: [quoted text]. [explanation]"}, ...}"""
-        
-        # Show current default system prompt for reference
-        st.markdown("**Current Default System Prompt:**")
-        show_default = st.checkbox("👁️ Show Default Prompt", key="show_default_prompt")
-        if show_default:
-            st.code(default_prompt, language="text")
-        
-        # Initialize system prompt state variables if they don't exist
-        if 'use_custom_prompt' not in st.session_state:
-            st.session_state['use_custom_prompt'] = False
-        if 'prompt_text' not in st.session_state:
-            st.session_state['prompt_text'] = default_prompt
-        
-        # Custom system prompt checkbox - use session state to maintain state
-        use_custom_prompt = st.checkbox(
-            "Use custom system prompt (uncheck to use default prompt)", 
-            value=st.session_state['use_custom_prompt'],
-            key="use_custom_prompt_checkbox"
-        )
-        
-        # Update session state when checkbox changes
-        st.session_state['use_custom_prompt'] = use_custom_prompt
-        
-        if use_custom_prompt:
-            prompt_col1, prompt_col2 = st.columns([4, 1])
             
-            with prompt_col1:
-                custom_system_prompt = st.text_area(
-                    "Custom System Prompt:",
-                    value=st.session_state['prompt_text'],
-                    height=300,
-                    help="Define how the AI should analyze documents and criteria. Must include instructions to return JSON in the specified format.",
-                    key="custom_system_prompt_input"
-                )
-                # Update both state variables when user types
-                st.session_state['custom_system_prompt'] = custom_system_prompt
-                st.session_state['prompt_text'] = custom_system_prompt
+            # Show current default system prompt for reference
+            st.markdown("**Current Default System Prompt:**")
+            show_default = st.checkbox("👁️ Show Default Prompt", key="show_default_prompt")
+            if show_default:
+                st.code(default_prompt, language="text")
             
-            with prompt_col2:
-                st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
-                if st.button("🔄 Reset to Default", help="Reset the system prompt to the default template"):
-                    st.session_state['prompt_text'] = default_prompt
-                    st.rerun()
+            # Initialize system prompt state variables if they don't exist
+            if 'use_custom_prompt' not in st.session_state:
+                st.session_state['use_custom_prompt'] = False
+            if 'prompt_text' not in st.session_state:
+                st.session_state['prompt_text'] = default_prompt
             
-            # Show current custom prompt status
-            st.info("✅ Using custom system prompt")
-        else:
-            # When unchecked, still preserve the custom prompt text but don't use it
-            if 'custom_system_prompt' in st.session_state:
-                del st.session_state['custom_system_prompt']
-            st.info("ℹ️ Using default system prompt")
-        
-        # Example templates
-        st.markdown("---")
-        st.markdown("**📋 Example Templates**")
-        
-        # Define templates
-        financial_template = """You are a financial analyst specializing in sector performance evaluation. Analyze the provided data against each criterion and determine performance ratings.
+            # Custom system prompt checkbox - use session state to maintain state
+            use_custom_prompt = st.checkbox(
+                "Use custom system prompt (uncheck to use default prompt)", 
+                value=st.session_state['use_custom_prompt'],
+                key="use_custom_prompt_checkbox"
+            )
+            
+            # Update session state when checkbox changes
+            st.session_state['use_custom_prompt'] = use_custom_prompt
+            
+            if use_custom_prompt:
+                prompt_col1, prompt_col2 = st.columns([4, 1])
+                
+                with prompt_col1:
+                    custom_system_prompt = st.text_area(
+                        "Custom System Prompt:",
+                        value=st.session_state['prompt_text'],
+                        height=300,
+                        help="Define how the AI should analyze documents and criteria. Must include instructions to return JSON in the specified format.",
+                        key="custom_system_prompt_input"
+                    )
+                    # Update both state variables when user types
+                    st.session_state['custom_system_prompt'] = custom_system_prompt
+                    st.session_state['prompt_text'] = custom_system_prompt
+                
+                with prompt_col2:
+                    st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
+                    if st.button("🔄 Reset to Default", help="Reset the system prompt to the default template"):
+                        st.session_state['prompt_text'] = default_prompt
+                        st.rerun()
+                
+                # Show current custom prompt status
+                st.info("✅ Using custom system prompt")
+            else:
+                # When unchecked, still preserve the custom prompt text but don't use it
+                if 'custom_system_prompt' in st.session_state:
+                    del st.session_state['custom_system_prompt']
+                st.info("ℹ️ Using default system prompt")
+            
+            # Example templates
+            st.markdown("---")
+            st.markdown("**📋 Example Templates**")
+            
+            # Define templates
+            financial_template = """You are a financial analyst specializing in sector performance evaluation. Analyze the provided data against each criterion and determine performance ratings.
 
 For each criterion:
 1. **Extract Data:** Find relevant financial metrics, ratios, or performance indicators
@@ -563,7 +828,7 @@ Use web search for missing market data, benchmarks, or sector averages when need
 
 Return JSON: {"criterion": {"verdict": "yes|no|unknown", "reason": "Data: [values]. Analysis: [explanation]"}}"""
 
-        classification_template = """You are a document classifier. Analyze the document content to determine if it matches each classification criterion.
+            classification_template = """You are a document classifier. Analyze the document content to determine if it matches each classification criterion.
 
 For each criterion:
 1. **Content Analysis:** Identify key themes, topics, and document type indicators
@@ -574,113 +839,212 @@ For each criterion:
    - 'unknown' = Ambiguous or insufficient content
 
 Return JSON: {"criterion": {"verdict": "yes|no|unknown", "reason": "Found: [evidence]. Classification: [reasoning]"}}"""
-        
-        template_col1, template_col2 = st.columns(2)
-        
-        with template_col1:
-            st.markdown("**Financial Sector Analysis:**")
-            st.code(financial_template)
-            if st.button("📋 Use Financial Template", key="use_financial_template"):
-                if use_custom_prompt:
-                    st.session_state['prompt_text'] = financial_template
-                    st.rerun()
-                else:
-                    st.warning("Please enable 'Use Custom System Prompt' first to use this template.")
-        
-        with template_col2:
-            st.markdown("**Document Classification:**")
-            st.code(classification_template)
-            if st.button("📋 Use Classification Template", key="use_classification_template"):
-                if use_custom_prompt:
-                    st.session_state['prompt_text'] = classification_template
-                    st.rerun()
-                else:
-                    st.warning("Please enable 'Use Custom System Prompt' first to use this template.")
+            
+            template_col1, template_col2 = st.columns(2)
+            
+            with template_col1:
+                st.markdown("**Financial Sector Analysis:**")
+                st.code(financial_template)
+                if st.button("📋 Use Financial Template", key="use_financial_template"):
+                    if use_custom_prompt:
+                        st.session_state['prompt_text'] = financial_template
+                        st.rerun()
+                    else:
+                        st.warning("Please enable 'Use Custom System Prompt' first to use this template.")
+            
+            with template_col2:
+                st.markdown("**Document Classification:**")
+                st.code(classification_template)
+                if st.button("📋 Use Classification Template", key="use_classification_template"):
+                    if use_custom_prompt:
+                        st.session_state['prompt_text'] = classification_template
+                        st.rerun()
+                    else:
+                        st.warning("Please enable 'Use Custom System Prompt' first to use this template.")
     
-    # Screening section
-    if uploaded_files and criteria:
-        st.subheader("Run Screening")
+    else:
+        # Summarization mode interface
+        st.markdown("**Focus Areas (Optional)**")
+        st.caption("Specify areas to pay special attention to in the summary. Leave empty for general summarization.")
         
-        if st.button("🔍 Start Screening Process", type="primary"):
-            st.session_state['screening_results'] = {}
-            st.session_state['used_criteria'] = criteria
+        # Initialize focus areas in session state
+        if 'focus_areas_text' not in st.session_state:
+            st.session_state['focus_areas_text'] = ""
+        
+        focus_areas_text = st.text_area(
+            "Enter focus areas (one per line):",
+            value=st.session_state['focus_areas_text'],
+            height=150,
+            help="Examples: Financial performance, Risk factors, Timeline and milestones, Technical specifications",
+            placeholder="Financial performance\nRisk factors\nTimeline and milestones\nTechnical specifications"
+        )
+        
+        # Update session state
+        st.session_state['focus_areas_text'] = focus_areas_text
+        
+        # Parse focus areas
+        focus_areas = [area.strip() for area in focus_areas_text.split('\n') if area.strip()]
+        
+        if focus_areas:
+            st.info(f"🎯 {len(focus_areas)} focus areas specified")
+            with st.expander("👀 Preview Focus Areas", expanded=False):
+                for i, area in enumerate(focus_areas, 1):
+                    st.markdown(f"**{i}.** {area}")
+        else:
+            st.info("📝 General summarization mode (no specific focus areas)")
+    
+    # Processing section (mode-specific)
+    if "Screening" in analysis_mode:
+        # Screening section
+        if uploaded_files and criteria:
+            st.subheader("Run Screening")
             
-            # Progress tracking
-            progress_container = st.container()
-            
-            with progress_container:
-                st.write("Processing documents...")
-                overall_progress = st.progress(0)
-                status_text = st.empty()
+            if st.button("🔍 Start Screening Process", type="primary"):
+                st.session_state['screening_results'] = {}
+                st.session_state['used_criteria'] = criteria
                 
-                for file_idx, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"Processing {uploaded_file.name} ({file_idx + 1}/{len(uploaded_files)})")
+                # Progress tracking
+                progress_container = st.container()
+                
+                with progress_container:
+                    st.write("Processing documents...")
+                    overall_progress = st.progress(0)
+                    status_text = st.empty()
                     
-                    # Individual file progress
-                    file_progress = st.progress(0)
+                    for file_idx, uploaded_file in enumerate(uploaded_files):
+                        status_text.text(f"Processing {uploaded_file.name} ({file_idx + 1}/{len(uploaded_files)})")
+                        
+                        # Individual file progress
+                        file_progress = st.progress(0)
+                        
+                        try:
+                            verdicts, raw_text = process_document(uploaded_file, criteria, file_progress)
+                            
+                            st.session_state['screening_results'][uploaded_file.name] = {
+                                'verdicts': verdicts,
+                                'raw_text': raw_text,
+                                'criteria': criteria
+                            }
+                            
+                            st.success(f"✅ Completed: {uploaded_file.name}")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+                        
+                        # Update overall progress
+                        overall_progress.progress((file_idx + 1) / len(uploaded_files))
+                    
+                    status_text.text("Screening complete!")
+                    
+                    # Save results to cache
+                    if st.session_state.get('screening_results'):
+                        cache_file = save_results_to_cache(
+                            st.session_state['screening_results'],
+                            st.session_state['used_criteria']
+                        )
+                        st.info(f"💾 Results cached to: {os.path.basename(cache_file)}")
+                        
+                        # Refresh cached sessions
+                        st.session_state['cached_sessions'] = load_cached_results()
+            
+            # Display results if available
+            if st.session_state.get('screening_results'):
+                st.subheader("📋 Screening Results Summary")
+                
+                for filename, file_data in st.session_state['screening_results'].items():
+                    with st.expander(f"📄 {filename}", expanded=True):
+                        verdicts = file_data['verdicts']
+                        
+                        # Format and display results
+                        formatted_results = format_verdict_results(verdicts)
+                        df = create_results_dataframe(formatted_results)
+                        
+                        # Color-code the dataframe
+                        def highlight_verdict(val):
+                            if val == 'PASS':
+                                return 'background-color: #d4edda; color: #155724'
+                            elif val == 'FAIL':
+                                return 'background-color: #f8d7da; color: #721c24'
+                            else:
+                                return 'background-color: #fff3cd; color: #856404'
+                        
+                        styled_df = df.style.map(highlight_verdict, subset=['Overall Verdict'])
+                        st.dataframe(styled_df, use_container_width=True)
+                        
+                        # Download button for individual file results
+                        json_str = json.dumps(file_data, indent=2)
+                        st.download_button(
+                            label=f"📥 Download {filename} Results (JSON)",
+                            data=json_str,
+                            file_name=f"{filename}_screening_results.json",
+                            mime="application/json"
+                        )
+    
+    else:
+        # Summarization mode processing
+        if uploaded_files:
+            st.subheader("Run Summarization")
+            
+            if st.button("📝 Start Summarization Process", type="primary"):
+                st.session_state['summarization_results'] = {}
+                st.session_state['used_focus_areas'] = focus_areas
+                
+                # Progress tracking
+                progress_container = st.container()
+                
+                with progress_container:
+                    st.write("Processing documents for holistic summary...")
+                    overall_progress = st.progress(0)
+                    status_text = st.empty()
                     
                     try:
-                        verdicts, raw_text = process_document(uploaded_file, criteria, file_progress)
+                        summaries, raw_text = process_holistic_summary(uploaded_files, focus_areas, overall_progress, status_text)
                         
-                        st.session_state['screening_results'][uploaded_file.name] = {
-                            'verdicts': verdicts,
+                        st.session_state['summarization_results']['combined_summary'] = {
+                            'summaries': summaries,
                             'raw_text': raw_text,
-                            'criteria': criteria
+                            'focus_areas': focus_areas,
+                            'source_files': [f.name for f in uploaded_files]
                         }
                         
-                        st.success(f"✅ Completed: {uploaded_file.name}")
+                        st.success("✅ Summarization complete!")
                         
                     except Exception as e:
-                        st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+                        st.error(f"❌ Error processing documents: {str(e)}")
                     
-                    # Update overall progress
-                    overall_progress.progress((file_idx + 1) / len(uploaded_files))
-                
-                status_text.text("Screening complete!")
-                
-                # Save results to cache
-                if st.session_state.get('screening_results'):
-                    cache_file = save_results_to_cache(
-                        st.session_state['screening_results'],
-                        st.session_state['used_criteria']
-                    )
-                    st.info(f"💾 Results cached to: {os.path.basename(cache_file)}")
-                    
-                    # Refresh cached sessions
-                    st.session_state['cached_sessions'] = load_cached_results()
-        
-        # Display results if available
-        if st.session_state.get('screening_results'):
-            st.subheader("📋 Screening Results Summary")
+                    status_text.text("Summarization complete!")
             
-            for filename, file_data in st.session_state['screening_results'].items():
-                with st.expander(f"📄 {filename}", expanded=True):
-                    verdicts = file_data['verdicts']
+            # Display results if available
+            if st.session_state.get('summarization_results'):
+                st.subheader("📝 Holistic Summary Results")
+                
+                file_data = st.session_state['summarization_results'].get('combined_summary')
+                
+                if file_data:
+                    source_files = file_data.get('source_files', [])
+                    expander_title = f"📄 Summary of: {', '.join(source_files)}"
                     
-                    # Format and display results
-                    formatted_results = format_verdict_results(verdicts)
-                    df = create_results_dataframe(formatted_results)
-                    
-                    # Color-code the dataframe
-                    def highlight_verdict(val):
-                        if val == 'PASS':
-                            return 'background-color: #d4edda; color: #155724'
-                        elif val == 'FAIL':
-                            return 'background-color: #f8d7da; color: #721c24'
-                        else:
-                            return 'background-color: #fff3cd; color: #856404'
-                    
-                    styled_df = df.style.map(highlight_verdict, subset=['Overall Verdict'])
-                    st.dataframe(styled_df, use_container_width=True)
-                    
-                    # Download button for individual file results
-                    json_str = json.dumps(file_data, indent=2)
-                    st.download_button(
-                        label=f"📥 Download {filename} Results (JSON)",
-                        data=json_str,
-                        file_name=f"{filename}_screening_results.json",
-                        mime="application/json"
-                    )
+                    with st.expander(expander_title, expanded=True):
+                        summaries = file_data['summaries']
+                        
+                        # Consolidate summaries from all chunks
+                        consolidated_summary = consolidate_summaries(summaries)
+                        
+                        # Display consolidated summary
+                        display_structured_summary(consolidated_summary, file_data['focus_areas'])
+                        
+                        # Download button for individual file results
+                        # Create a downloadable version of the results, excluding raw text for size
+                        downloadable_data = file_data.copy()
+                        downloadable_data.pop('raw_text', None)
+                        json_str = json.dumps(downloadable_data, indent=2)
+                        
+                        st.download_button(
+                            label=f"📥 Download Summary (JSON)",
+                            data=json_str,
+                            file_name=f"holistic_summary.json",
+                            mime="application/json"
+                        )
 
 def results_analysis_page():
     st.header("📊 Results Analysis")

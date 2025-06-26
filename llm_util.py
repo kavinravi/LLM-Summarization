@@ -44,9 +44,9 @@ print(f"DEBUG: .env loaded = {os.path.exists('.env')}")
 # Configure Gemini
 genai.configure(api_key=get_env_var("GOOGLE_API_KEY"))
 
-MAX_INPUT_TOKENS = 2000000  # Gemini 2.0 Flash has 2M token context window
-# 150,000 chars ≈ 100k tokens – much larger chunks possible with Gemini's 2M window
-CHUNK_SIZE_CHARS = 150000
+MAX_INPUT_TOKENS = 2000000  # Gemini 1.5 Flash has 2M token context window
+# 150,000 chars ≈ 100k tokens – much larger chunks possible with Gemini's 1.5M window
+CHUNK_SIZE_CHARS = 15000
 
 
 # ---------- FILE I/O ----------
@@ -54,7 +54,8 @@ def extract_text(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         with pdfplumber.open(path) as pdf:
-            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+            # Using layout=True can help preserve spacing in complex documents
+            return "\n".join(p.extract_text(layout=True) or "" for p in pdf.pages)
     if ext in (".docx", ".doc"):
         return "\n".join(p.text for p in docx.Document(path).paragraphs)
     if ext in (".xlsx", ".xls"):
@@ -487,6 +488,140 @@ def llm_blurb(verdict_json: dict, temperature: float = 0.6) -> str:
         error_msg = f"Error generating blurb: {str(e)}"
         print(f"DEBUG: {error_msg}")
         return error_msg
+
+
+def llm_summarize(chunk: str, focus_areas: list[str] = None, temperature: float = 0.3) -> dict:
+    """Summarize document chunk with optional focus areas, providing structured output with highlights and citations."""
+    
+    # Build focus areas text
+    focus_text = "Provide a general summary of the document."
+    if focus_areas:
+        focus_list = "\n".join([f'- "{area}"' for area in focus_areas])
+        focus_text = (
+            "Pay special attention to the following topics. For each topic, provide a detailed analysis and supporting quotes "
+            f"under the 'focus_area_insights' key in the JSON output. The topics are:\n{focus_list}"
+        )
+
+    system_prompt = (
+        "You are an expert document analyst. Your task is to create a concise but structured summary of a given document chunk. "
+        "You MUST respond with ONLY a single, valid JSON object that adheres to the specified format. Do not add any text before or after the JSON object. "
+        "Do not use markdown `json` block, just output the raw JSON."
+        "\n\n"
+        "The JSON object must have the following structure. Keep all summaries and lists concise.\n"
+        "{\n"
+        '  "executive_summary": "Brief 2-4 sentence overview of the entire document chunk.",\n'
+        '  "key_highlights": ["List of the top 5 most critical points as strings."],\n'
+        '  "main_sections": {\n'
+        '    "Section Title From Document": {\n'
+        '      "summary": "Concise 3-5 sentence summary of this specific section.",\n'
+        '      "key_points": ["List of the top 3-5 key takeaways from this section."],\n'
+        '      "citations": ["Provide 1-2 brief, relevant quotes from the document that support the summary."]\n'
+        '    }\n'
+        '  },\n'
+        '  "focus_area_insights": {\n'
+        '    "Name of Focus Area": {\n'
+        '      "findings": "Concise 3-5 sentence analysis of what the document says about this focus area.",\n'
+        '      "citations": ["Provide 1-2 brief, relevant quotes from the document related to this focus area."]\n'
+        '    }\n'
+        '  },\n'
+        '  "data_points": ["List of the top 5-7 key metrics, numbers, or quantitative information found."],\n'
+        '  "action_items": ["List of the top 3-5 potential next steps or recommendations based on the content."]\n'
+        "}\n"
+    )
+    
+    user_prompt = (
+        f"Document Chunk:\n```\n{chunk}\n```\n\n"
+        f"Your Task:\n{focus_text}\n\n"
+        "Please generate the JSON summary now."
+    )
+    
+    # Configure generation parameters
+    generation_config = {
+        "temperature": temperature,
+        "max_output_tokens": 8192,
+        "response_mime_type": "application/json"
+    }
+    
+    # Create model instance
+    gemini_model = genai.GenerativeModel(
+        model_name=MODEL,
+        generation_config=generation_config,
+        system_instruction=system_prompt,
+        # Add safety settings to be less restrictive, if needed
+        safety_settings={
+            'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
+            'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
+            'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
+            'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
+        }
+    )
+    
+    try:
+        # Generate response
+        response = gemini_model.generate_content(user_prompt)
+        
+        # Check for blocking reasons or other issues
+        if not response.candidates:
+            block_reason = "Unknown"
+            if response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason'):
+                block_reason = response.prompt_feedback.block_reason.name
+            print(f"DEBUG: Prompt was blocked or failed. Reason: {block_reason}")
+            return {
+                "executive_summary": f"Content generation blocked. Reason: {block_reason}.",
+                "key_highlights": ["The AI's safety filters may have been triggered, or there was another issue with the request."],
+                "main_sections": {}, "focus_area_insights": {}, "data_points": [], "action_items": []
+            }
+
+        response_text = ""
+        candidate = response.candidates[0]
+        
+        # Check if generation finished for a non-standard reason
+        finish_reason = getattr(candidate, 'finish_reason', "UNKNOWN").name
+        if finish_reason != "STOP":
+            print(f"DEBUG: Generation finished for a reason other than STOP: {finish_reason}")
+            # Even if it stopped for another reason, there might still be partial content
+            if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                response_text = "".join(part.text for part in candidate.content.parts if hasattr(part, 'text'))
+            
+            if not response_text:
+                return {
+                    "executive_summary": "Summary generation stopped prematurely.",
+                    "key_highlights": [f"Reason: {finish_reason}. This can happen with very long documents or due to safety filters."],
+                    "main_sections": {}, "focus_area_insights": {}, "data_points": [], "action_items": []
+                }
+        else:
+             if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                response_text = "".join(part.text for part in candidate.content.parts if hasattr(part, 'text'))
+
+        if response_text:
+            try:
+                # The response is now expected to be a clean JSON string
+                summary_result = json.loads(response_text)
+                return summary_result
+            except json.JSONDecodeError as e:
+                print(f"DEBUG: JSON parse error in summarization: {e}")
+                return {
+                    "executive_summary": "Error parsing summary response from AI.",
+                    "key_highlights": ["The AI returned a summary, but it was not in a valid JSON format."],
+                    "main_sections": {}, "focus_area_insights": {}, "data_points": [], "action_items": [],
+                    "_raw_response": response_text[:1000]
+                }
+        else:
+            return {
+                "executive_summary": "No response was generated by the AI.",
+                "key_highlights": ["This could be due to a network issue, an invalid API key, or a problem with the AI service."],
+                "main_sections": {}, "focus_area_insights": {}, "data_points": [], "action_items": []
+            }
+            
+    except Exception as e:
+        print(f"DEBUG: An unexpected error occurred in summarization: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return {
+            "executive_summary": f"An unexpected error occurred: {str(e)}",
+            "key_highlights": ["Summary generation failed due to a system error."],
+            "main_sections": {}, "focus_area_insights": {}, "data_points": [], "action_items": []
+        }
 
 
 # ---------- CLI ----------
