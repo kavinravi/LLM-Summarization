@@ -17,13 +17,10 @@ from datetime import datetime
 from typing import List, Dict, Any
 
 # Import our existing utility functions
-from utils.llm_util import extract_text, llm_screen, llm_blurb, llm_summarize
+from utils import extract_text, llm_screen, llm_blurb, llm_summarize
 
-# Tool modules (we'll create these)
-from tools.document_screener import DocumentScreener
-from tools.document_summarizer import DocumentSummarizer
-from tools.marketing_blurb import MarketingBlurbGenerator
-from tools.content_analyzer import ContentAnalyzer
+# Tool modules
+from tools import DocumentScreener, DocumentSummarizer, MarketingBlurbGenerator, ContentAnalyzer
 
 # Page configuration
 st.set_page_config(
