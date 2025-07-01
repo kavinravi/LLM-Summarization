@@ -88,7 +88,13 @@ class MarketingBlurbGenerator(BaseTool):
                 "Key Benefits",
                 "Unique Features", 
                 "Competitive Advantages",
-                "Technical Specifications"
+                "Investment Opportunities",
+                "Technical Specifications",
+                "Market Potential", 
+                "Cost Savings",
+                "ROI & Financial Returns",
+                "Innovation & Technology",
+                "Risk Mitigation"
             ],
             default=["Key Benefits", "Unique Features"],
             help="Select the main points to highlight"

@@ -47,7 +47,7 @@ class DocumentSummarizer(BaseTool):
             focus_text = st.text_area(
                 "Focus Areas",
                 height=150,
-                placeholder="Example:\nFinancial performance\nRisk factors\nMarket opportunities\nTechnical specifications",
+                placeholder="Example:\nPatient safety protocols\nEnvironmental impact assessment\nUser experience design\nFinancial performance",
                 help="Each line will be treated as a separate focus area for the summary"
             )
             
