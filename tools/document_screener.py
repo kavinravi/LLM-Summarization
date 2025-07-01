@@ -447,49 +447,103 @@ Return ONLY JSON in this format:
                     
                     # Option to see detailed chunk results
                     if st.checkbox(f"Show detailed chunk results for {filename}", key=f"details_{filename}"):
-                        for chunk_name, chunk_results in file_verdicts.items():
-                            with st.expander(f"📄 **{chunk_name}** - Detailed Analysis", expanded=False):
-                                for criterion, result in chunk_results.items():
-                                    verdict = result.get('verdict', 'unknown')
-                                    reason = result.get('reason', 'No reason provided')
+                        # Create tabs for each chunk to avoid nested expanders
+                        chunk_names = list(file_verdicts.keys())
+                        if len(chunk_names) > 1:
+                            chunk_tabs = st.tabs([f"📄 {chunk_name}" for chunk_name in chunk_names])
+                            
+                            for tab_idx, (chunk_name, chunk_results) in enumerate(file_verdicts.items()):
+                                with chunk_tabs[tab_idx]:
+                                    st.markdown(f"**Analysis Results for {chunk_name}:**")
                                     
-                                    # Choose styling based on verdict
-                                    if verdict == 'yes':
-                                        st.markdown(f"""
-                                        <div style="background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #28a745;">
-                                            <strong>✅ {criterion}</strong><br>
-                                            <strong>Verdict:</strong> YES<br>
-                                            <strong>Full Explanation:</strong><br>
-                                            {reason.replace(chr(10), '<br>')}
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                    elif verdict == 'no':
-                                        st.markdown(f"""
-                                        <div style="background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #dc3545;">
-                                            <strong>❌ {criterion}</strong><br>
-                                            <strong>Verdict:</strong> NO<br>
-                                            <strong>Full Explanation:</strong><br>
-                                            {reason.replace(chr(10), '<br>')}
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                    elif verdict == 'unknown':
-                                        st.markdown(f"""
-                                        <div style="background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffc107;">
-                                            <strong>❓ {criterion}</strong><br>
-                                            <strong>Verdict:</strong> UNKNOWN<br>
-                                            <strong>Full Explanation:</strong><br>
-                                            {reason.replace(chr(10), '<br>')}
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                    else:
-                                        st.markdown(f"""
-                                        <div style="background-color: #f8f9fa; color: #495057; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #6c757d;">
-                                            <strong>ℹ️ {criterion}</strong><br>
-                                            <strong>Verdict:</strong> {verdict.upper()}<br>
-                                            <strong>Full Explanation:</strong><br>
-                                            {reason.replace(chr(10), '<br>')}
-                                        </div>
-                                        """, unsafe_allow_html=True)
+                                    for criterion, result in chunk_results.items():
+                                        verdict = result.get('verdict', 'unknown')
+                                        reason = result.get('reason', 'No reason provided')
+                                        
+                                        # Choose styling based on verdict
+                                        if verdict == 'yes':
+                                            st.markdown(f"""
+                                            <div style="background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #28a745;">
+                                                <strong>✅ {criterion}</strong><br>
+                                                <strong>Verdict:</strong> YES<br>
+                                                <strong>Full Explanation:</strong><br>
+                                                {reason.replace(chr(10), '<br>')}
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        elif verdict == 'no':
+                                            st.markdown(f"""
+                                            <div style="background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #dc3545;">
+                                                <strong>❌ {criterion}</strong><br>
+                                                <strong>Verdict:</strong> NO<br>
+                                                <strong>Full Explanation:</strong><br>
+                                                {reason.replace(chr(10), '<br>')}
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        elif verdict == 'unknown':
+                                            st.markdown(f"""
+                                            <div style="background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffc107;">
+                                                <strong>❓ {criterion}</strong><br>
+                                                <strong>Verdict:</strong> UNKNOWN<br>
+                                                <strong>Full Explanation:</strong><br>
+                                                {reason.replace(chr(10), '<br>')}
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        else:
+                                            st.markdown(f"""
+                                            <div style="background-color: #f8f9fa; color: #495057; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #6c757d;">
+                                                <strong>ℹ️ {criterion}</strong><br>
+                                                <strong>Verdict:</strong> {verdict.upper()}<br>
+                                                <strong>Full Explanation:</strong><br>
+                                                {reason.replace(chr(10), '<br>')}
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                        else:
+                            # Single chunk - no need for tabs
+                            chunk_name = chunk_names[0]
+                            chunk_results = file_verdicts[chunk_name]
+                            st.markdown(f"**Analysis Results for {chunk_name}:**")
+                            
+                            for criterion, result in chunk_results.items():
+                                verdict = result.get('verdict', 'unknown')
+                                reason = result.get('reason', 'No reason provided')
+                                
+                                # Choose styling based on verdict
+                                if verdict == 'yes':
+                                    st.markdown(f"""
+                                    <div style="background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #28a745;">
+                                        <strong>✅ {criterion}</strong><br>
+                                        <strong>Verdict:</strong> YES<br>
+                                        <strong>Full Explanation:</strong><br>
+                                        {reason.replace(chr(10), '<br>')}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                elif verdict == 'no':
+                                    st.markdown(f"""
+                                    <div style="background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #dc3545;">
+                                        <strong>❌ {criterion}</strong><br>
+                                        <strong>Verdict:</strong> NO<br>
+                                        <strong>Full Explanation:</strong><br>
+                                        {reason.replace(chr(10), '<br>')}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                elif verdict == 'unknown':
+                                    st.markdown(f"""
+                                    <div style="background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffc107;">
+                                        <strong>❓ {criterion}</strong><br>
+                                        <strong>Verdict:</strong> UNKNOWN<br>
+                                        <strong>Full Explanation:</strong><br>
+                                        {reason.replace(chr(10), '<br>')}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"""
+                                    <div style="background-color: #f8f9fa; color: #495057; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #6c757d;">
+                                        <strong>ℹ️ {criterion}</strong><br>
+                                        <strong>Verdict:</strong> {verdict.upper()}<br>
+                                        <strong>Full Explanation:</strong><br>
+                                        {reason.replace(chr(10), '<br>')}
+                                    </div>
+                                    """, unsafe_allow_html=True)
                 else:
                     st.warning("No screening results available for this file")
         
@@ -499,8 +553,18 @@ Return ONLY JSON in this format:
         col1, col2 = st.columns(2)
         
         with col1:
-            # Export consolidated results as CSV
-            csv_data = df.to_csv(index=False)
+            # Create a simple DataFrame for CSV export
+            export_data = []
+            for criterion, result in consolidated.items():
+                export_data.append({
+                    'Criterion': criterion,
+                    'Verdict': result['verdict'],
+                    'Confidence': result.get('confidence', 'N/A'),
+                    'Supporting_Evidence': result.get('reason', '').replace('\n', ' ').replace('\r', ' ')
+                })
+            
+            export_df = pd.DataFrame(export_data)
+            csv_data = export_df.to_csv(index=False)
             st.download_button(
                 label="📊 Download Consolidated Results (CSV)",
                 data=csv_data,
@@ -534,7 +598,17 @@ Return ONLY JSON in this format:
         """Consolidate chunk results into overall verdicts per criterion"""
         consolidated = {}
         
+        # Remove duplicates from criteria list (case-insensitive) and preserve order
+        unique_criteria = []
+        seen = set()
         for criterion in criteria:
+            # Use lowercase for comparison but keep original formatting
+            criterion_lower = criterion.lower().strip()
+            if criterion_lower not in seen:
+                unique_criteria.append(criterion)
+                seen.add(criterion_lower)
+        
+        for criterion in unique_criteria:
             all_verdicts = []
             all_reasons = []
             
@@ -555,29 +629,58 @@ Return ONLY JSON in this format:
                 consolidated[criterion] = {
                     'verdict': 'unknown',
                     'reason': 'No analysis results available',
-                    'confidence': 'low'
+                    'confidence': 'low',
+                    'verdict_counts': {'unknown': 0}
                 }
                 continue
             
-            # Determine overall verdict using majority rule with priority
+            # Count all verdict types
             verdict_counts = {}
             for verdict in all_verdicts:
                 verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
             
-            # Priority: yes > no > unknown > error
-            if verdict_counts.get('yes', 0) > 0:
+            # FIXED LOGIC: Any "yes" verdict = overall "yes" (as requested by user)
+            yes_count = verdict_counts.get('yes', 0)
+            no_count = verdict_counts.get('no', 0)
+            unknown_count = verdict_counts.get('unknown', 0)
+            
+            if yes_count > 0:
+                # ANY yes votes = overall YES
                 overall_verdict = 'yes'
-                confidence = 'high' if verdict_counts['yes'] > len(all_verdicts) * 0.7 else 'medium'
-            elif verdict_counts.get('no', 0) > len(all_verdicts) * 0.5:
+                confidence = 'high' if yes_count > len(all_verdicts) * 0.5 else 'medium'
+            elif no_count > unknown_count:
+                # More no than unknown = overall NO
                 overall_verdict = 'no'
-                confidence = 'high' if verdict_counts['no'] > len(all_verdicts) * 0.7 else 'medium'
+                confidence = 'high' if no_count > len(all_verdicts) * 0.7 else 'medium'
             else:
+                # Everything else = unknown
                 overall_verdict = 'unknown'
                 confidence = 'low'
             
-            # Combine reasons
-            unique_reasons = list(set(all_reasons))[:3]  # Top 3 unique reasons
-            combined_reason = "; ".join(unique_reasons) if unique_reasons else "No specific evidence found"
+            # Combine reasons intelligently
+            yes_reasons = []
+            no_reasons = []
+            unknown_reasons = []
+            
+            for i, verdict in enumerate(all_verdicts):
+                if i < len(all_reasons):
+                    reason = all_reasons[i]
+                    if verdict == 'yes':
+                        yes_reasons.append(reason)
+                    elif verdict == 'no':
+                        no_reasons.append(reason)
+                    else:
+                        unknown_reasons.append(reason)
+            
+            # Prioritize reasons based on overall verdict
+            if overall_verdict == 'yes' and yes_reasons:
+                best_reasons = list(set(yes_reasons))[:2]
+            elif overall_verdict == 'no' and no_reasons:
+                best_reasons = list(set(no_reasons))[:2]
+            else:
+                best_reasons = list(set(all_reasons))[:2]
+            
+            combined_reason = "; ".join(best_reasons) if best_reasons else "No specific evidence found"
             
             consolidated[criterion] = {
                 'verdict': overall_verdict,

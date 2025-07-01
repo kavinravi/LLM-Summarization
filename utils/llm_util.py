@@ -394,6 +394,31 @@ def _screen_with_model(chunk: str, criteria: list[str], model: str, temperature:
                             # Store debug info for potential display
                             result['_debug'] = debug_messages
                             
+                            # Normalize response keys to match original criteria exactly
+                            normalized_result = {}
+                            
+                            # Create mapping from lowercase to original criteria
+                            criteria_mapping = {crit.lower().strip(): crit for crit in criteria}
+                            
+                            # Map LLM response keys to original criteria
+                            for response_key, response_value in result.items():
+                                if response_key.startswith('_'):  # Skip debug/meta keys
+                                    normalized_result[response_key] = response_value
+                                    continue
+                                    
+                                # Try to find matching original criterion
+                                response_key_lower = response_key.lower().strip()
+                                if response_key_lower in criteria_mapping:
+                                    original_criterion = criteria_mapping[response_key_lower]
+                                    normalized_result[original_criterion] = response_value
+                                    debug_messages.append(f"DEBUG: Mapped '{response_key}' to '{original_criterion}'")
+                                else:
+                                    # Keep as-is if no match found (shouldn't happen with good LLM)
+                                    normalized_result[response_key] = response_value
+                                    debug_messages.append(f"DEBUG: No mapping found for '{response_key}', keeping as-is")
+                            
+                            result = normalized_result
+                            
                             # Ensure every criterion is present; if missing, mark unknown
                             for crit in criteria:
                                 if crit not in result:
