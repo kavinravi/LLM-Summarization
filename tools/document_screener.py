@@ -365,30 +365,46 @@ Return ONLY JSON in this format:
         st.markdown("### 📊 Consolidated Results")
         st.markdown("*Overall verdict across all documents and chunks*")
         
-        df_data = []
+        # Create expandable verdict cards instead of truncated table
         for criterion, result in consolidated.items():
-            df_data.append({
-                'Criterion': criterion,
-                'Verdict': result['verdict'],
-                'Confidence': result.get('confidence', 'N/A'),
-                'Supporting Evidence': result.get('reason', '')[:100] + "..." if len(result.get('reason', '')) > 100 else result.get('reason', '')
-            })
-        
-        df = pd.DataFrame(df_data)
-        
-        # Color code the results
-        def highlight_verdict(val):
-            if val == 'yes':
-                return 'background-color: #d4edda; color: #155724'
-            elif val == 'no':
-                return 'background-color: #f8d7da; color: #721c24'
-            elif val == 'unknown':
-                return 'background-color: #fff3cd; color: #856404'
+            verdict = result['verdict']
+            reason = result.get('reason', 'No explanation provided')
+            confidence = result.get('confidence', 'N/A')
+            
+            # Choose color and icon based on verdict
+            if verdict == 'yes':
+                color = "#d4edda"
+                text_color = "#155724"
+                icon = "✅"
+            elif verdict == 'no':
+                color = "#f8d7da"
+                text_color = "#721c24"
+                icon = "❌"
+            elif verdict == 'unknown':
+                color = "#fff3cd"
+                text_color = "#856404"
+                icon = "❓"
             else:
-                return 'background-color: #f8f9fa; color: #495057'
-        
-        styled_df = df.style.applymap(highlight_verdict, subset=['Verdict'])
-        st.dataframe(styled_df, use_container_width=True)
+                color = "#f8f9fa"
+                text_color = "#495057"
+                icon = "ℹ️"
+            
+            with st.expander(f"{icon} **{criterion}** - {verdict.upper()}", expanded=False):
+                st.markdown(f"""
+                <div style="
+                    background-color: {color};
+                    color: {text_color};
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin: 10px 0;
+                    border-left: 4px solid {text_color};
+                ">
+                    <strong>Verdict:</strong> {verdict.upper()}<br>
+                    <strong>Confidence:</strong> {confidence}<br><br>
+                    <strong>Full Explanation:</strong><br>
+                    {reason.replace(chr(10), '<br>')}
+                </div>
+                """, unsafe_allow_html=True)
         
         # Individual file results
         st.markdown("### 📁 Individual File Results")
@@ -432,19 +448,48 @@ Return ONLY JSON in this format:
                     # Option to see detailed chunk results
                     if st.checkbox(f"Show detailed chunk results for {filename}", key=f"details_{filename}"):
                         for chunk_name, chunk_results in file_verdicts.items():
-                            st.markdown(f"**{chunk_name}:**")
-                            for criterion, result in chunk_results.items():
-                                verdict = result.get('verdict', 'unknown')
-                                reason = result.get('reason', 'No reason provided')
-                                
-                                if verdict == 'yes':
-                                    st.success(f"✅ {criterion}: {reason[:200]}...")
-                                elif verdict == 'no':
-                                    st.error(f"❌ {criterion}: {reason[:200]}...")
-                                elif verdict == 'unknown':
-                                    st.warning(f"❓ {criterion}: {reason[:200]}...")
-                                else:
-                                    st.info(f"ℹ️ {criterion}: {reason[:200]}...")
+                            with st.expander(f"📄 **{chunk_name}** - Detailed Analysis", expanded=False):
+                                for criterion, result in chunk_results.items():
+                                    verdict = result.get('verdict', 'unknown')
+                                    reason = result.get('reason', 'No reason provided')
+                                    
+                                    # Choose styling based on verdict
+                                    if verdict == 'yes':
+                                        st.markdown(f"""
+                                        <div style="background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #28a745;">
+                                            <strong>✅ {criterion}</strong><br>
+                                            <strong>Verdict:</strong> YES<br>
+                                            <strong>Full Explanation:</strong><br>
+                                            {reason.replace(chr(10), '<br>')}
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                    elif verdict == 'no':
+                                        st.markdown(f"""
+                                        <div style="background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #dc3545;">
+                                            <strong>❌ {criterion}</strong><br>
+                                            <strong>Verdict:</strong> NO<br>
+                                            <strong>Full Explanation:</strong><br>
+                                            {reason.replace(chr(10), '<br>')}
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                    elif verdict == 'unknown':
+                                        st.markdown(f"""
+                                        <div style="background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffc107;">
+                                            <strong>❓ {criterion}</strong><br>
+                                            <strong>Verdict:</strong> UNKNOWN<br>
+                                            <strong>Full Explanation:</strong><br>
+                                            {reason.replace(chr(10), '<br>')}
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                    else:
+                                        st.markdown(f"""
+                                        <div style="background-color: #f8f9fa; color: #495057; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #6c757d;">
+                                            <strong>ℹ️ {criterion}</strong><br>
+                                            <strong>Verdict:</strong> {verdict.upper()}<br>
+                                            <strong>Full Explanation:</strong><br>
+                                            {reason.replace(chr(10), '<br>')}
+                                        </div>
+                                        """, unsafe_allow_html=True)
                 else:
                     st.warning("No screening results available for this file")
         
