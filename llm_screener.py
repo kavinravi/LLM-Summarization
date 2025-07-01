@@ -246,15 +246,29 @@ def main():
     st.title("📄 Document Analysis Tool")
     st.markdown("*A simple, powerful way to analyze your documents*")
     
-    # Progress indicator
+    # Progress indicator with clickable navigation
     stages = ['Upload', 'Select Tool', 'Configure', 'Results']
-    current_stage_idx = ['upload', 'tool_selection', 'configure', 'results'].index(st.session_state.stage)
+    stage_keys = ['upload', 'tool_selection', 'configure', 'results']
+    current_stage_idx = stage_keys.index(st.session_state.stage)
     
     progress_cols = st.columns(4)
     for i, stage_name in enumerate(stages):
         with progress_cols[i]:
             if i <= current_stage_idx:
-                st.markdown(f"**✅ {stage_name}**")
+                # Completed stages are clickable (except current if it's the first stage)
+                if i < current_stage_idx or (i == current_stage_idx and i > 0):
+                    if st.button(f"✅ {stage_name}", key=f"nav_{stage_keys[i]}", help=f"Go back to {stage_name}", use_container_width=True):
+                        # Handle navigation logic
+                        if stage_keys[i] == 'upload':
+                            st.session_state.stage = 'upload'
+                            st.session_state.uploaded_files = []
+                        elif stage_keys[i] == 'tool_selection' and st.session_state.uploaded_files:
+                            st.session_state.stage = 'tool_selection'
+                        elif stage_keys[i] == 'configure' and st.session_state.selected_tool:
+                            st.session_state.stage = 'configure'
+                        st.rerun()
+                else:
+                    st.markdown(f"**✅ {stage_name}**")
             else:
                 st.markdown(f"⭕ {stage_name}")
     
