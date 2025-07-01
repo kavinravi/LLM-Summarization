@@ -204,10 +204,14 @@ class MarketingBlurbGenerator(BaseTool):
             st.markdown(f"""
             <div style="
                 background-color: #f8f9fa;
+                color: #212529;
                 border-left: 4px solid #007bff;
                 padding: 20px;
                 margin: 20px 0;
                 border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                line-height: 1.6;
             ">
                 {blurb_text.replace(chr(10), '<br>')}
             </div>

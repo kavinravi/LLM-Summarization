@@ -232,7 +232,7 @@ Return ONLY JSON in this format:
         return {
             'criteria': criteria,
             'temperature': temperature,
-            'custom_prompt': custom_prompt if custom_prompt.strip() else None,
+            'custom_prompt': custom_prompt if custom_prompt and custom_prompt.strip() else None,
             'chunk_size': chunk_size
         }
     
